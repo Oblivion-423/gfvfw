@@ -148,18 +148,19 @@ def encode(plain: bytes) -> bytes:
 
 @dataclass(frozen=True)
 class FieldSpec:
-    """一个字段：偏移、类型、名称、是否已确证。"""
+    """一个字段：偏移、类型、名称、是否已确证、显示名、说明。"""
 
     offset: int
     kind: str                   # str21 / str / u8 / u16 / u32 / f32
     name: str
     certain: bool
     note: str = ""
+    label: str = ""             # 给人看的名字（页面用；空则回退到 name）
 
 
 def _str_field(off: int, maxlen: int, name: str, certain: bool = True,
-               note: str = "") -> FieldSpec:
-    return FieldSpec(off, "str%d" % maxlen, name, certain, note)
+               note: str = "", label: str = "") -> FieldSpec:
+    return FieldSpec(off, "str%d" % maxlen, name, certain, note, label)
 
 
 #: 结构体字段表。
@@ -174,26 +175,38 @@ FIELDS: tuple[FieldSpec, ...] = (
     #   0x00 姓名 / 0x15 呼号 / 0x28 四字符文本 / 0x2d 日期 / 0x3a 中队
     # ⚠️ 长度给得比实测串长，读取时**以 NUL 为准**：
     #    早先把呼号长度写成 7，把 "Oblivion" 截成了 "Oblivio"。
-    _str_field(0x00, 0x15, "name", note="飞行员姓名；官方默认模板里是 Joe Pilot"),
-    _str_field(0x15, 0x13, "callsign", note="游戏内呼号"),
+    _str_field(0x00, 0x15, "name", note="飞行员姓名；官方默认模板里是 Joe Pilot",
+               label="姓名"),
+    _str_field(0x15, 0x13, "callsign", note="游戏内呼号；与 .lbk 文件名一致",
+               label="呼号"),
     _str_field(0x28, 4, "text_28", False,
-               "4 字符自由文本，只有同一人的两份存档里有值（ID5A）"),
-    _str_field(0x2d, 9, "date", note="MM/DD/YY"),
-    _str_field(0x3a, 0x0d, "squadron", note="中队名；默认模板里是 Default"),
+               "4 字符自由文本，只有同一人的两份存档里有值（ID5A）",
+               label="4 字符文本"),
+    _str_field(0x2d, 9, "date", note="MM/DD/YY，随存档日期变化", label="存档日期"),
+    # ⚠️ 早先标为 certain=True，理由是"官方界面有中队输入框"。但实测 4 份样本里
+    #    有 3 份该字段**与呼号完全相同**（Oblivion/Obsequies/SZSZS），
+    #    只有官方默认模板是 "Default"。这更像"BMS 默认把呼号填进这个字段"，
+    #    不足以断定它稳定表示中队 —— 所以降级为推断，只展示、不入库。
+    _str_field(0x3a, 0x0d, "squadron", False,
+               "疑似中队名。实测 3/4 样本与呼号相同，仅官方模板为 Default",
+               label="中队（待核对）"),
 
     # ---- 浮点 ----
     FieldSpec(0x48, "f32", "flight_hours", True,
               "飞行小时数。三重佐证：① 界面字段 edtFlightHours 是双精度微调框，"
               "保存路径 fstp [eax+0x48]；② 同一人四份存档随日期**单调递增**"
-              "（251.6 → 253.8 → 255.9 → 296.3）；③ 量级与老玩家相符"),
+              "（251.6 → 253.8 → 255.9 → 296.3）；③ 量级与老玩家相符",
+              label="累计飞行小时"),
     FieldSpec(0x4c, "f32", "ace_factor", True,
               "官方界面字段 edtAceFactor，保存路径 fstp [eax+0x4c]；"
-              "默认模板里恰为 1.0"),
+              "默认模板里恰为 1.0",
+              label="Ace 系数"),
 
     # ---- 军衔 ----
     FieldSpec(0x50, "u32", "rank_index", True,
               "军衔下拉框下标 → RANKS。佐证：同一人在 2026-02-27 为 3、"
-              "03-03 起为 4，与「期间晋升」一致"),
+              "03-03 起为 4，与「期间晋升」一致",
+              label="军衔下标"),
 
     # ---- 16 位计数区 ----
     FieldSpec(0x54, "u16", "counter_54", False),

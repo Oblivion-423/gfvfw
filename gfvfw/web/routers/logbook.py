@@ -134,20 +134,27 @@ def _parsed_view(rec) -> dict | None:
     fields = data.get("fields") or {}
     certain_names = set(data.get("certain") or [])
 
-    certain = [{"name": s.name, "offset": s.offset, "note": s.note,
-                "value": fields.get(s.name)}
+    certain = [{"name": s.name, "label": s.label or s.name, "offset": s.offset,
+                "note": s.note, "value": fields.get(s.name)}
                for s in LBP.FIELDS if s.certain]
     medals = [{"offset": off, "code": code, "label": label,
                "value": fields.get("medal_%s" % code)}
               for off, code, label in LB.MEDAL_FIELDS]
-    others = [{"name": k, "value": v} for k, v in sorted(fields.items())
-              if k not in certain_names
-              and not k.startswith("medal_")
-              and not k.startswith("name")
-              and not k.startswith("callsign")
-              and not k.startswith("squadron")
-              and not k.startswith("date")
-              and not k.startswith("text_")]
+    #: 未确证字段的显示名（有 label 用 label，没有就显示偏移名）。
+    #: ⚠️ `raw_u32_*` 是解析器额外读出的只读 u32（官方工具不作输入框），
+    #:    也一并展示 —— 折叠在 <details> 里，但**不隐瞒**。
+    labels = {s.name: (s.label or s.name) for s in LBP.FIELDS}
+
+    def _label(key: str) -> str:
+        if key in labels:
+            return labels[key]
+        if key.startswith("raw_u32_"):
+            return "只读 u32 @0x%s" % key[len("raw_u32_"):]
+        return key
+
+    others = [{"name": _label(k), "key": k, "value": v}
+              for k, v in sorted(fields.items())
+              if k not in certain_names and not k.startswith("medal_")]
     return {"certain": certain, "medals": medals, "others": others,
             "warnings": data.get("warnings") or [],
             "rank_code": fields.get("rank_index") is not None

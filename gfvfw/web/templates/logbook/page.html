@@ -6,7 +6,7 @@
   <div>
     <h1>{% if is_self %}我的 Logbook{% else %}Logbook · {{ member.callsign }}{% endif %}</h1>
     <div class="sub">
-      归档 BMS Logbook 原件，并把其中的军衔 / 资质 / 累计飞行量登记到名册
+      归档 BMS Logbook 原件，并<strong>自动解析</strong>其中的军衔 / 累计飞行量 / 勋章
     </div>
   </div>
   <div>
@@ -199,7 +199,8 @@
     <tbody>
       {% for f in parsed.certain %}
       <tr>
-        <td><strong>{{ f.name }}</strong></td>
+        <td><strong>{{ f.label }}</strong>
+          <br><span class="mono small muted">{{ f.name }}</span></td>
         <td>
           {% if f.name == 'flight_hours' %}
             {{ '%.2f 小时' % f.value }}
@@ -218,8 +219,9 @@
     </tbody>
   </table>
   <p class="small muted" style="margin:8px 0 0">
-    上表中的 <code>flight_hours</code>、<code>rank_index</code>、姓名/呼号/中队/日期
-    是<strong>已确证</strong>的字段（有官方工具代码或时间序列佐证），会写入名册。
+    上表字段是<strong>已确证</strong>的（有官方工具代码或时间序列佐证），会写入名册。
+    姓名 / 呼号 / 存档日期也会显示出来，<strong>请核对是不是本人</strong> ——
+    文件里的呼号与名册不一致时，页面上方会给出提示。
   </p>
 
   {# ---- 勋章 ---- #}
@@ -254,16 +256,21 @@
       文件中的其余数值（{{ parsed.others | length }} 项，<strong>含义未确认</strong>，未写入名册）
     </summary>
     <table style="margin-top:8px">
-      <thead><tr><th style="width:220px">字段（按偏移命名）</th><th>值</th></tr></thead>
+      <thead><tr><th style="width:220px">字段</th><th style="width:150px">偏移名</th><th>值</th></tr></thead>
       <tbody>
         {% for o in parsed.others %}
-        <tr><td class="mono small">{{ o.name }}</td><td>{{ o.value }}</td></tr>
+        <tr>
+          <td>{{ o.name }}</td>
+          <td class="mono small muted">{{ o.key }}</td>
+          <td>{{ o.value }}</td>
+        </tr>
         {% endfor %}
       </tbody>
     </table>
     <p class="small muted" style="margin:8px 0 0">
-      这些是官方工具能编辑、但<strong>我们尚未确认业务含义</strong>的统计项
-      （战役与对抗两组：击杀、任务数、评分等）。
+      这些是官方工具能编辑、或结构里存在、但<strong>我们尚未确认业务含义</strong>的统计项
+      （击杀、任务数、评分等），也包括
+      <code>raw_u32_*</code> 这类只读 32 位值。
       它们<strong>只展示、不写入名册</strong>，避免把猜的标签当成事实。
       如果你在 LogbookEditor 里对照出哪一项是什么，告诉我即可补上映射 ——
       已归档的文件用「重新解析」就能回填，无需重传。
