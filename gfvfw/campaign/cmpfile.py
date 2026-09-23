@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import Any
@@ -53,7 +54,16 @@ class Reader:
         self._need(4); v = struct.unpack_from("<I", self.d, self.p)[0]; self.p += 4; return v
 
     def f32(self) -> float:
-        self._need(4); v = struct.unpack_from("<f", self.d, self.p)[0]; self.p += 4; return v
+        """读单精度浮点，**非有限值（NaN / ±Inf）一律归 0.0**。
+
+        未初始化的 ``.cam`` 字段是全 1 位模式，按 f32 解释就是 NaN；
+        它一旦落进任何 ``NOT NULL`` 的 REAL 列，SQLite 会把它当 NULL 拒绝。
+        详见 ``camdata._Reader.f32`` 的说明。
+        """
+        self._need(4)
+        v = struct.unpack_from("<f", self.d, self.p)[0]
+        self.p += 4
+        return v if math.isfinite(v) else 0.0
 
     def raw(self, n: int) -> bytes:
         if n < 0:

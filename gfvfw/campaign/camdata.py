@@ -64,6 +64,7 @@ Objective 记录取**（``JsonExporter.cs:843-850``），``.obj`` 的对应字�
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -183,16 +184,36 @@ class _Reader:
         return v
 
     def f32(self, what: str = "f32") -> float:
+        """读一个 IEEE-754 单精度浮点。
+
+        ⚠️⚠️ **非有限值一律归 0.0**（NaN / ±Inf）—— 这是踩出来的。
+
+        ``.cam`` 里未初始化的字段常常是**全 1 的位模式**（``0xFFFFFFFF``），
+        而它按 f32 解释恰好是 **NaN**。于是解析出一个"幽灵单位"：
+        ``unit_id=0xFFFF0001``、``id_creator=0xFFFFFFFF``、``z=nan``。
+        写入时 SQLite 把 NaN 存成 **NULL**，而 ``campaign_units.z`` 是
+        ``NOT NULL`` ⟹ ``IntegrityError: NOT NULL constraint failed: campaign_units.z``
+        ⟹ 整个存档入库失败。
+
+        更麻烦的是**它把友好错误页也一起打掉了**：会话已经进入
+        PendingRollback，而当时的异常处理里又拿这个会话去查战役列表 ——
+        用户看到的是光秃秃的 500，而真正的原因（一个 NaN）一个字都没露。
+
+        归 0.0 而不是保留 NaN：NaN 在数据库里没有合法表示（必变 NULL），
+        在坐标语义里也等于"未知/未设置"。要区分"真的 0"与"字段未初始化"，
+        看 ``unit_id``/``id_creator`` 那些哨兵值即可。
+        """
         self._need(self.pos, 4, what)
         v = struct.unpack_from("<f", self.data, self.pos)[0]
         self.pos += 4
-        return v
+        return v if math.isfinite(v) else 0.0
 
     def f64(self, what: str = "f64") -> float:
+        """同 :meth:`f32`：非有限值归 0.0。"""
         self._need(self.pos, 8, what)
         v = struct.unpack_from("<d", self.data, self.pos)[0]
         self.pos += 8
-        return v
+        return v if math.isfinite(v) else 0.0
 
     def raw(self, size: int, what: str = "bytes") -> bytes:
         self._need(self.pos, size, what)

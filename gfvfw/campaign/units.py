@@ -34,6 +34,7 @@ EntityType   C++ 基类与对应的读取器
 """
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import Any
@@ -113,10 +114,26 @@ class _R:
         self._need(4); v = struct.unpack_from("<I", self.d, self.p)[0]; self.p += 4; return v
 
     def f32(self) -> float:
-        self._need(4); v = struct.unpack_from("<f", self.d, self.p)[0]; self.p += 4; return v
+        self._need(4)
+        v = struct.unpack_from("<f", self.d, self.p)[0]
+        self.p += 4
+        # ⚠️ 非有限值归 0.0 —— 见 :meth:`f64` 的说明。
+        return v if math.isfinite(v) else 0.0
 
     def f64(self) -> float:
-        self._need(8); v = struct.unpack_from("<d", self.d, self.p)[0]; self.p += 8; return v
+        """读取双精度浮点，**非有限值（NaN / ±Inf）一律归 0.0**。
+
+        ``.cam`` 里未初始化的实体槽位是**全 1 位模式**（``0xFFFFFFFF``），
+        按 f32 解释恰好是 NaN。它会顺着 ``Unit.z`` 一路走到
+        ``campaign_units.z``（``NOT NULL``）：SQLite 把 NaN 存成 NULL，
+        于是整份存档以 ``IntegrityError`` 收场。
+        归 0.0 而不是保留 NaN：NaN 在 SQL 里没有合法表示，在高度语义上
+        本来也就是"未知/未设置"。
+        """
+        self._need(8)
+        v = struct.unpack_from("<d", self.d, self.p)[0]
+        self.p += 8
+        return v if math.isfinite(v) else 0.0
 
     def vu(self) -> VUId:
         return VUId(num=self.u32(), creator=self.u32())

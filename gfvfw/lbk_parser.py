@@ -65,6 +65,7 @@ BMS Logbook（``.lbk``）读取器 —— **已完全解出格式**。
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -347,7 +348,14 @@ def parse(data: bytes, *, strict: bool = True) -> LbkRecord:
         elif spec.kind == "u32":
             rec.fields[spec.name] = struct.unpack_from("<I", buf, off)[0]
         elif spec.kind == "f32":
-            rec.fields[spec.name] = struct.unpack_from("<f", buf, off)[0]
+            v = struct.unpack_from("<f", buf, off)[0]
+            # 未初始化/损坏的记录里 0xFFFFFFFF 会被读成 NaN；NaN 进不了
+            # 合法 JSON（json.dumps 会写成裸 NaN），也会让"求和/取最大"之类
+            # 的统计全部变成 NaN。统一收敛成 0.0，并标注该字段不可靠。
+            if not math.isfinite(v):
+                v = 0.0
+                rec.uncertain.append(spec.name)
+            rec.fields[spec.name] = v
         else:                                       # pragma: no cover
             raise AssertionError("未知字段类型 %s" % spec.kind)
         if not spec.certain:

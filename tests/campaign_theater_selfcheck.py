@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
@@ -735,6 +736,45 @@ def test_web(bms: Path, cam: Path) -> None:
         # ── 删除存档：连带明细 + 战局回退 ────────────────────────────
         with TestClient(app) as client:
             check("owner 重新登录", login(client, "admiral"))
+
+            # ── 上传失败必须给出**可读的 400**，不能是光秃秃的 500 ──────
+            #    真实事故：.cam 里未初始化的槽位让 z=NaN →
+            #    NOT NULL constraint failed: campaign_units.z →
+            #    会话进入 PendingRollback；而当时的 fail() 又拿这个脏会话去查
+            #    战役列表，于是 PendingRollbackError 把真正的错误信息盖掉，
+            #    用户只看到 "Internal Server Error"。这里把那条链路原样复现。
+            def _dirty_then_fail(self, db, *a, **kw):    # noqa: ANN001
+                _sv = db.scalars(select(CampaignSave)).first()
+                db.add(CampaignUnit(save_id=_sv.id if _sv else "missing",
+                                    unit_kind="Objective", unit_id=1,
+                                    z=float("nan")))
+                db.flush()      # ← 这里抛 IntegrityError，会话变脏
+                raise AssertionError("不该走到这里")     # pragma: no cover
+
+            _orig_ingest = CampaignService.ingest
+            CampaignService.ingest = _dirty_then_fail
+            try:
+                _tok = _CSRF.search(client.get("/theater/upload").text).group(1)
+                r = client.post("/theater/upload",
+                                files={"file": ("ghost.cam", b"\xff" * 64)},
+                                data={"csrf_token": _tok, "campaign_id": ""},
+                                follow_redirects=False)
+            finally:
+                CampaignService.ingest = _orig_ingest
+            check("★ 入库失败时返回可读的 400 而不是 500",
+                  r.status_code == 400, "得到 %d" % r.status_code)
+            check("★ 错误信息露出真正的原因（campaign_units.z）",
+                  "campaign_units.z" in r.text, r.text[:200])
+            check("★ 提示写成「解析失败」，且没有 Internal Server Error",
+                  "解析失败" in r.text and "Internal Server Error" not in r.text)
+            check("★ 失败后仍能渲染出战役下拉（说明会话已回滚）",
+                  "<select" in r.text and "name=\"campaign_id\"" in r.text)
+            with TS() as db:
+                check("★ 失败的上传没有留下半成品单位行",
+                      db.scalar(select(func.count()).select_from(CampaignUnit)
+                                .where(CampaignUnit.unit_id == 1)) == 0)
+
+
             with TS() as db:
                 sv = db.scalars(select(CampaignSave)).first()
                 sv_id = sv.id
@@ -932,6 +972,192 @@ def test_objective_reader_parity(bms: Path) -> None:
           "camp_id=%s" % rec.get("camp_id"))
 
 
+def test_nonfinite_guard() -> None:
+    """[7] 非有限浮点（NaN / ±Inf）不得进入数据库。
+
+    这是一个**真实事故**的回归测试。``.cam`` 里未初始化的实体槽位是全 1
+    位模式（``0xFFFFFFFF``），按 f32 解释恰好是 NaN：实测一个
+    ``unit_id=0xFFFF0001``、``id_creator=0xFFFFFFFF`` 的"幽灵单位"带着
+    ``z=nan``。SQLite 把 NaN 存成 NULL，而 ``campaign_units.z`` 是 NOT NULL，
+    于是整份存档以 ``IntegrityError`` 收场 —— 而当时异常处理里又拿这个
+    已经进入 PendingRollback 的会话去查战役列表，用户最终只看到光秃秃的
+    500，"解析失败：NOT NULL constraint failed" 一个字都没露出来。
+
+    所以这里测两件事：
+      A. 每一层读取器都把非有限值收敛掉（不写 NaN 进库）；
+      B. 会话一旦脏了，**必须回滚**才能继续查询 —— 也就是那个被掩盖的 500。
+    """
+    print("\n[7] 非有限浮点防护")
+    from sqlalchemy.exc import IntegrityError, PendingRollbackError
+
+    from gfvfw.campaign import camdata, cmpfile, state, units as unitmod
+    from gfvfw.services.campaign import _safe_json
+
+    ALL_FF = b"\xff" * 8
+    POS_INF = struct.pack("<f", float("inf"))
+    NEG_INF = struct.pack("<f", float("-inf"))
+    FINITE = struct.pack("<f", 1234.5)
+    FINITE_D = struct.pack("<d", -9876.25)
+
+    # ── A1. camdata 读取器 ───────────────────────────────────────────
+    r = camdata._Reader(ALL_FF, ".uni")
+    got = r.f32()
+    check("camdata f32 把全 1 位模式读成 0.0 而不是 NaN",
+          got == 0.0 and math.isfinite(got), "得到 %r" % (got,))
+    r = camdata._Reader(POS_INF + NEG_INF, ".uni")
+    check("camdata f32 吃掉 ±Inf", r.f32() == 0.0 and r.f32() == 0.0)
+    r = camdata._Reader(FINITE, ".uni")
+    check("camdata f32 保留正常值", abs(r.f32() - 1234.5) < 1e-3)
+    r = camdata._Reader(ALL_FF, ".uni")
+    check("camdata f64 同样收敛", r.f64() == 0.0)
+    r = camdata._Reader(FINITE_D, ".obj")
+    check("camdata f64 保留正常值", abs(r.f64() + 9876.25) < 1e-9)
+    r = camdata._Reader(ALL_FF, ".uni")
+    r.f32()
+    check("收敛不影响游标前进", r.pos == 4)
+
+    # ── A2. .uni 单位流读取器（z 就是从这条路径来的）─────────────────
+    ur = unitmod._R(ALL_FF, ".uni")
+    check("units._R f32 收敛 NaN（z 的来源）", ur.f32() == 0.0)
+    check("units._R 游标正确", ur.p == 4)
+    ur = unitmod._R(POS_INF, ".uni")
+    check("units._R f32 收敛 +Inf", ur.f32() == 0.0)
+    ur = unitmod._R(FINITE_D, ".uni")
+    check("units._R f64 保留正常值", abs(ur.f64() + 9876.25) < 1e-9)
+
+    # ── A3. .cmp 读取器 ─────────────────────────────────────────────
+    cr = cmpfile.Reader(ALL_FF, ".cmp")
+    check("cmpfile.Reader f32 收敛 NaN", cr.f32() == 0.0)
+
+    # ── A4. _finite 帮手：`nan or 0.0` 是挡不住的 ────────────────────
+    nan = float("nan")
+    check("NaN 是「真值」，`nan or 0.0` 会原样穿过（这正是坑）",
+          (nan or 0.0) != (nan or 0.0))
+    check("_finite 把 NaN 收敛成 0.0", state._finite(nan) == 0.0)
+    check("_finite 把 ±Inf 收敛成 0.0",
+          state._finite(float("inf")) == 0.0
+          and state._finite(float("-inf")) == 0.0)
+    check("_finite 保留正常值", state._finite(-12.5) == -12.5)
+    check("_finite 兜住不可转换的输入",
+          state._finite(None) == 0.0 and state._finite("abc") == 0.0)
+    check("_finite 保留 0 的语义", state._finite(0.0) == 0.0)
+
+    # ── A5. 入库前的最后一道：UnitRec.z 一定是有限值 ─────────────────
+    warns: list[str] = []
+    u = unitmod.Unit(unit_kind="Objective", z=nan)
+    u.id = unitmod.VUId(num=0xFFFF0001, creator=0xFFFFFFFF)
+    u.x, u.y = 7103, 0
+    rec = state._unit_to_rec(u, None, warns)
+    check("UnitRec.z 已收敛成 0.0", rec.z == 0.0, "z=%r" % (rec.z,))
+    check("越界坐标照旧不上图", rec.on_map is False)
+    check("收敛 NaN 会留下可读告警",
+          any("高度不是有限数" in w for w in warns), str(warns))
+    check("告警里带得出是哪条记录",
+          any("0xFFFF0001" in w or "4294901761" in w for w in warns), str(warns))
+    warns2: list[str] = []
+    rec2 = state._unit_to_rec(unitmod.Unit(unit_kind="Objective", z=1234.5,
+                                           x=100, y=200), None, warns2)
+    check("正常高度不被改写", rec2.z == 1234.5)
+    check("正常单位不产生高度告警",
+          not any("高度" in w for w in warns2), str(warns2))
+
+    # ── A6. JSON 里不能出现裸 NaN / Infinity ─────────────────────────
+    s = _safe_json({"z": nan, "nested": [1.0, float("inf"), {"deep": nan}],
+                    "ok": 2.5})
+    check("_safe_json 不输出裸 NaN 记号", s is not None and "NaN" not in s)
+    check("_safe_json 不输出裸 Infinity 记号", s is not None and "Infinity" not in s)
+    check("_safe_json 用 null 取代非有限值",
+          s is not None and s.count("null") == 3, str(s))
+    check("_safe_json 保留正常值", s is not None and "2.5" in s)
+    if s is not None:
+        try:
+            json.loads(s, parse_constant=_reject_constant)
+            strict_ok = True
+        except ValueError:
+            strict_ok = False
+        check("_safe_json 产出严格合法 JSON（浏览器 JSON.parse 也认）", strict_ok)
+
+    # ── A7. 真正写库：NaN 会变成 NULL 撞上 NOT NULL ──────────────────
+    tmp = Path(tempfile.mkdtemp())
+    eng = create_engine("sqlite+pysqlite:///%s" % (tmp / "nan.sqlite3").as_posix(),
+                        connect_args={"check_same_thread": False})
+    Base.metadata.create_all(eng)
+    S = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False)
+    from gfvfw.models.campaign_state import CampaignSave, CampaignUnit
+
+    with S() as db:
+        save = CampaignSave(sha256="0" * 64, original_filename="nan.cam",
+                            stored_path="nan.cam")
+        db.add(save)
+        db.commit()
+        save_id = save.id
+
+        # 顺带记录一个反直觉的细节：显式给 None **不会**撞约束 ——
+        # SQLAlchemy 只在"列上没有值"时才套用 default，而 None 会被
+        # 当作"没值"处理，于是 default=0.0 兜住了。
+        # 所以真正危险的只有 NaN：它是个**合法取值**，ORM 会照样下发，
+        # 再由 sqlite3 驱动把它变成 NULL。
+        db.add(CampaignUnit(save_id=save_id, unit_kind="Objective", unit_id=0,
+                            z=None))
+        none_ok = True
+        try:
+            db.flush()
+        except Exception:  # noqa: BLE001
+            none_ok = False
+        check("z=None 会被 ORM 默认值兜住（所以别指望它拦住 NaN）", none_ok)
+        db.rollback()
+
+        # 这就是事故现场：z=NaN —— SQLite 没有 NaN，驱动把它写成 NULL
+        db.add(CampaignUnit(save_id=save_id, unit_kind="Objective", unit_id=1,
+                            z=float("nan")))
+        raised = None
+        try:
+            db.flush()
+        except Exception as exc:  # noqa: BLE001
+            raised = exc
+        check("z=NaN 触发 NOT NULL 约束（事故现场）",
+              raised is not None, "居然没报错")
+        check("异常类型是 IntegrityError",
+              isinstance(raised, IntegrityError), repr(raised))
+        check("错误信息点名 campaign_units.z",
+              raised is not None and "campaign_units.z" in str(raised),
+              str(raised))
+
+        # ── 被掩盖的 500：脏会话上再查询会抛 PendingRollbackError ──────
+        masked = None
+        try:
+            list(db.scalars(select(CampaignSave)))
+        except Exception as exc:  # noqa: BLE001
+            masked = exc
+        check("脏会话上继续查询会抛 PendingRollbackError（真正的 500 成因）",
+              isinstance(masked, PendingRollbackError), repr(masked))
+
+        # ── 修法：先回滚，再查询 ────────────────────────────────────
+        db.rollback()
+        again = None
+        try:
+            again = list(db.scalars(select(CampaignSave)))
+        except Exception as exc:  # noqa: BLE001
+            again = exc
+        check("回滚后同一会话可以正常查询（fail() 必须这么做）",
+              isinstance(again, list) and len(again) == 1, repr(again))
+
+        # 回滚后再放一条正常的 z=0.0 单位，入库应当成功
+        db.add(CampaignUnit(save_id=save_id, unit_kind="Objective",
+                            unit_id=0xFFFF0001, z=0.0))
+        db.commit()
+        got = db.scalars(select(CampaignUnit)).one()
+        check("收敛后的幽灵单位可以正常入库", got.z == 0.0)
+        check("哨兵 unit_id 被原样保留（便于事后排查）",
+              got.unit_id == 0xFFFF0001)
+    eng.dispose()
+
+
+def _reject_constant(name: str):
+    """给 json.loads 用：遇到裸 NaN/Infinity 记号就报错（严格模式）。"""
+    raise ValueError("非法 JSON 常量：%s" % name)
+
+
 def main() -> int:
     print("=" * 72)
     print("战役管理自校验")
@@ -944,6 +1170,11 @@ def main() -> int:
     test_bundle()
     test_permissions()
     test_models()
+    try:
+        test_nonfinite_guard()
+    except Exception as exc:  # noqa: BLE001
+        print("  ERROR [7] 非有限浮点防护抛异常: %s" % exc)
+        FAILURES.append("非有限浮点防护异常: %s" % exc)
 
     bms_env = os.environ.get("GFVFW_BMS_INSTALL_PATH") or r"G:\BMS\Falcon BMS 4.38"
     bms = Path(bms_env) if bms_env and Path(bms_env).is_dir() else None

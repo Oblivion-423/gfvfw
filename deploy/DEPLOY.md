@@ -522,6 +522,12 @@ du -sh /srv/gfvfw/bms-data
 ```
 
 - **必需部分共 47.9 MB**；少拷文件不会崩，但会缺名字/类型，页面显示会退化。
+- ⚠️ **缺剧场数据的后果比"显示退化"更难看**：`.uni` 单位流是**靠类表路由**的
+  （`ct_get(entity_type_id)`）。类表缺失 ⟹ 每条记录都走"未知类型，按 Objective
+  解析"的兜底分支，流一旦错位就会读出**垃圾记录**（实测能读到
+  `unit_id=0xFFFF0001`、坐标 `7103` 这种不可能的值，并伴随
+  「坐标越界 / entityType 解析失败」告警）。所以上传 `.cam` 后若页面空荡荡
+  又满是告警，**先回来核对这一节**，别怀疑解析器。
 - ⚠️ 最后那个 `Theater.txt` 最容易漏：缺了它地图页算不出经纬度，而它只有几百字节。
 - **剧场底图不要拷**（四个剧场合计 1.6 GB）。缺底图只是地图页没背景图，
   目标点与单位照画。要背景图就自压一张**正方形** PNG（边长 ≥1024、≥512 KB）
@@ -1089,6 +1095,9 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 改了 `gfvfw.service` / `Caddyfile` 不生效 | 它们**不在** `ReadWritePaths` 里，是系统文件 | 改 `/etc/systemd/system/gfvfw.service` 与 `/etc/caddy/Caddyfile`，然后 `systemctl daemon-reload` / `systemctl reload caddy` |
 | `update.sh` 第 1 步报 **`PermissionError: [Errno 13] Permission denied: '.env'`**（或任何**相对路径**的文件名） | **工作目录不对**。`sudo` 会保留调用者的 cwd，而 `/root` 是 0700 —— `sudo -u gfvfw` 的子进程连进都进不去，于是任何相对路径访问都变成 EACCES。根因是配置用相对路径找 `.env` | 已修两处：`gfvfw/config.py` 的 `env_file` 改成**绝对路径**（根治 —— 配置不该依赖 cwd），`update.sh` 开头 `cd "$APP_DIR"`（纵深防御）。拉到包含此修复的版本后即不再出现 |
 | 备份报 **`sqlite3.OperationalError: near "INTO": syntax error`** | 用了 `VACUUM INTO`，它要 SQLite **3.27+**，而 RHEL 8 系系统 SQLite 是 **3.26.0**。开发机（Windows + Python 3.10）自带 3.39，**本地测不出来** | 已改成 `sqlite3.Connection.backup()`（在线备份 API，3.6.11 起就有）。核对服务器实际版本：`/srv/gfvfw/.venv/bin/python -c "import sqlite3;print(sqlite3.sqlite_version)"` |
+| 上传 `.cam` 报 **Internal Server Error**（页面只有一行 500） | 两个问题叠加：① `.cam` 里**未初始化的实体槽位**是全 1 位模式，按 f32 读恰好是 **NaN**；SQLite 把 NaN 当 NULL，撞上 `campaign_units.z` 的 `NOT NULL` ⟹ `IntegrityError`。② 当时的失败处理**没有先回滚**就那这个脏会话去查战役列表 ⟹ `PendingRollbackError` 把真因盖掉，用户只看到 500 | 已修：所有浮点读取器与入库前兜底都把非有限值收敛成 `0.0`；所有 `except` 分支**先 `db.rollback()` 再渲染**，所以现在会显示「解析失败：`NOT NULL constraint failed: campaign_units.z`」这样的可读提示（HTTP 400）。日志里搜得到：`journalctl -u gfvfw \| grep campaign_units`。若仍出现 500，页面会给出**错误编号**，用 `journalctl -u gfvfw \| grep <错误编号>` 取完整堆栈 |
+| 上传 `.cam` 成功但页面**没有单位/目标点**，或出现「坐标越界」「entityType 解析失败」告警 | 服务器缺 **BMS 剧场数据**（`GFVFW_BMS_INSTALL_PATH` 指向的目录） | 见第 5 步。`.uni` 的单位流**靠类表路由**：类表缺失时所有记录都会退化成"当 Objective 解析"，流一旦错位就会读出垃圾记录（实测能读出 `unit_id=0xFFFF0001`、坐标 7103 这种不可能的值）。核对：`ls -la /srv/gfvfw/bms-data/ && du -sh /srv/gfvfw/bms-data/`，应有 47.9 MB 量级且**别漏 `Theater.txt`** |
+| 想知道服务器上传链路到底行不行 | —— | 在开发机上跑 `scripts/cam_upload_probe.py http://你的域名 <密码> <某个.cam>`：真的走 HTTP 上传，只在出现服务器异常页时失败。⚠️ 它**会真的写一条存档记录**，先拿探针服务器试 |
 
 ⚠️ **不要给服务加 `--workers N`**：SQLite 是单写者，多进程会写冲突。
 本项目所有缓存（剧场数据、解析状态）也都是按单进程设计的。

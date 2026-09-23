@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -423,6 +424,20 @@ def _callsign(theater, callsign_id: Any, callsign_num: Any) -> str:
     return ""
 
 
+def _finite(v, default: float = 0.0) -> float:
+    """把任意解析出来的数值收敛成**有限浮点数**。
+
+    ``.cam`` 里未初始化的槽位字段常是 0xFF 填满，读成 float 就是 NaN/Inf。
+    ``nan or 0.0`` 这种写法**挡不住** NaN —— NaN 是"真值"，会原样穿过去，
+    最终在 SQLite 里变成 NULL 撞上 NOT NULL 约束。所以统一走这里。
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    return f if math.isfinite(f) else default
+
+
 def _co_pos(co) -> tuple[float, float]:
     """取目标点的世界英尺坐标（``CampObjEntry`` 用的是 ``pos_x``/``pos_y``）。"""
     x = getattr(co, "pos_x", None)
@@ -431,7 +446,7 @@ def _co_pos(co) -> tuple[float, float]:
     y = getattr(co, "pos_y", None)
     if y is None:
         y = getattr(co, "position_y", 0.0)
-    return float(x or 0.0), float(y or 0.0)
+    return _finite(x), _finite(y)
 
 
 def _projection(theater) -> dict[str, Any]:
@@ -478,6 +493,19 @@ def _unit_to_rec(u: Unit, theater, warnings: list[str]) -> UnitRec:
     if not on_map:
         warnings.append("单位 %s#%d 坐标越界 (%d,%d)，不上图"
                         % (u.unit_kind, u.id.num, u.x, u.y))
+    # ⚠️ z 必须是有限值。
+    #    .cam 里存在**未初始化的实体槽**（实测 unit_id=0xFFFF0001、
+    #    id_creator=0xFFFFFFFF，字段全是 0xFF），把它当作 Objective 读出来
+    #    会得到 z=NaN。SQLite 把 NaN 存成 NULL，而 campaign_units.z 是
+    #    NOT NULL —— 结果是整次上传以 IntegrityError 500 收场。
+    #    camdata 的 f32/f64 已经做了一层拦截，这里是**入库前的最后一道**：
+    #    即便将来有别的读取路径绕过 _Reader，也不会再把 NaN 写进库。
+    #    只改值、不丢记录：单位本身照常保留（宁可少一个高度，不要少一条数据）。
+    z = u.z
+    if z is None or not math.isfinite(z):
+        warnings.append("单位 %s#%d 的高度不是有限数（%r），按 0 处理"
+                        % (u.unit_kind, u.id.num, z))
+        z = 0.0
     name, callsign = _resolve_unit_name(u, theater)
     r = UnitRec(
         unit_kind=u.unit_kind,
@@ -490,7 +518,7 @@ def _unit_to_rec(u: Unit, theater, warnings: list[str]) -> UnitRec:
         callsign=callsign,
         east=float(u.x) if on_map else None,
         north=float(u.y) if on_map else None,
-        z=u.z,
+        z=z,
         dest_east=u.dest_x or None,
         dest_north=u.dest_y or None,
         on_map=on_map,
@@ -562,7 +590,7 @@ def _team_from_tea(tea: dict, team_id: int) -> TeamState:
     t.equipment = int(tea.get("equipment") or 0)
     t.initiative = int(tea.get("initiative") or 0)
     t.reinforcement = int(tea.get("reinforcement") or 0)
-    t.player_rating = float(tea.get("player_rating") or 0.0)
+    t.player_rating = _finite(tea.get("player_rating"))
     t.offensive_loss = int(tea.get("offensive_loss") or 0)
     t.attack_time = int(tea.get("attack_time") or 0)
 
@@ -891,7 +919,7 @@ def build_state(cam: bytes | Path | str, theater=None, *,
                 else:
                     nm = radii
                 if nm:
-                    st.sam_threat[name] = float(nm)
+                    st.sam_threat[name] = _finite(nm)
         except Exception as exc:  # noqa: BLE001
             st.warnings.append("SAM 半径读取失败：%s" % exc)
         try:

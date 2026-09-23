@@ -235,7 +235,9 @@ def main() -> int:
 
                 r = client.get("/log/campaign?acmi=upload")
                 token = csrf_of(r.text)
-                check("上传阶段含历史文件警示", "不导入历史文件" in r.text)
+                check("上传阶段不再出现历史文件警示",
+                      "不导入历史文件" not in r.text
+                      and "请只上传本次任务的文件" not in r.text)
                 check("上传阶段含流程步骤",
                       "上传文件" in r.text and "归并确认" in r.text)
 

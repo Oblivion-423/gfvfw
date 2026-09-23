@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -216,9 +217,20 @@ class CampaignService:
             state = self._parse(src)
         except Exception as exc:  # noqa: BLE001 - 解析失败也要留记录
             log.warning("战役存档解析失败：%s（%s）", filename, exc)
+            # ⚠️ 这里**不能**改成 db.rollback()：
+            #    save 这条"解析失败"记录正是我们要留下的东西，回滚会把它删掉。
+            #    _parse() 只读文件、不碰 Session，所以此刻会话仍是干净的，
+            #    commit 是安全的。若将来 _parse() 开始写库，必须先 rollback
+            #    再重新 db.add(save)，否则 commit 会抛 PendingRollbackError，
+            #    真正的解析错误反而被它盖掉。
             save.parse_status = "failed"
             save.parse_error = str(exc)[:4000]
-            db.commit()
+            try:
+                db.commit()
+            except Exception:  # noqa: BLE001
+                db.rollback()
+                log.exception("写入解析失败记录时又失败：%s", filename)
+                raise
             result.warnings.append("解析失败：%s" % exc)
             return result
 
@@ -438,12 +450,32 @@ class CampaignService:
             .limit(1)).first()
 
 
+def _jsonable(obj: Any, depth: int = 0) -> Any:
+    """把解析结果收敛成**严格合法**的 JSON 值。
+
+    ``json.dumps`` 默认 ``allow_nan=True``，会把 NaN/Infinity 写成裸 ``NaN``
+    / ``Infinity`` 记号 —— Python 自己读得回来，但那不是合法 JSON，
+    浏览器里的 ``JSON.parse`` 会直接抛错。.cam 里未初始化的 0xFF 槽位
+    恰好最容易产出 NaN，所以这里统一换成 ``null``。
+    """
+    if depth > 12:
+        return "…"
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {str(k): _jsonable(v, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonable(v, depth + 1) for v in obj]
+    return obj
+
+
 def _safe_json(obj: Any, limit: int = 20000) -> Optional[str]:
     """尽量序列化；超大或不可序列化时退化成摘要，避免拖垮入库。"""
     if not obj:
         return None
     try:
-        s = json.dumps(obj, ensure_ascii=False, default=str)
+        s = json.dumps(_jsonable(obj), ensure_ascii=False, default=str,
+                       allow_nan=False)
     except Exception:  # noqa: BLE001
         return None
     if len(s) > limit:

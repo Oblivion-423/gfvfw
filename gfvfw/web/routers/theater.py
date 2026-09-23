@@ -241,7 +241,21 @@ async def upload_submit(request: Request,
         raise HTTPException(status_code=413, detail="存档文件过大")
 
     def fail(message: str, status: int = 400):
-        """把失败渲染回上传页（带上当前配置，便于自助排查）。"""
+        """把失败渲染回上传页（带上当前配置，便于自助排查）。
+
+        ⚠️ 必须**先回滚**再往下走。
+            入库过程中抛出的异常（例如 campaign_units.z 的 NOT NULL 失败）
+            会让 Session 进入 "PendingRollbackError" 状态：此后任何一次
+            查询/刷新都会直接抛 PendingRollbackError，覆盖掉真正的异常。
+            下面的 render 要查 Campaign 列表，所以不先回滚的话，
+            用户看到的就不是这条 fail() 的可读提示，而是又一个 500 ——
+            我们把真正的错误信息亲手弄丢了。
+            回滚本身再套一层 try：回滚失败也不能遮蔽原始异常。
+        """
+        try:
+            db.rollback()
+        except Exception:                               # noqa: BLE001
+            log.exception("回滚会话失败（原始错误：%s）", message)
         return render(request, "theater/upload.html", {
             "error": message,
             "campaigns": list(db.scalars(select(Campaign).where(

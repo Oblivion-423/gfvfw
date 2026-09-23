@@ -1157,6 +1157,47 @@ BMS 版本升级可能静默改动格式。因此"解析失败"是**正常分支
 
 ---
 
+## 5.8 隐藏页 `/enroll`：管理员直接开队员账号 ✅（已实现）
+
+**联队要求**："直接注册为队员"。三档身份的正常路径依旧是
+"注册（→ 游客）→ 提交申请 → 管理员提升为队员"，但联队需要一条
+**不经申请**的旁路，用于线下已经确认、当面拉进来的人。
+
+**形态定稿（用户选择 A）**：管理员专用**隐藏页**。
+
+| 维度 | 结论 |
+|---|---|
+| 入口 | 固定路径 `/enroll`，**不进导航**，只能靠链接进入 |
+| 守卫 | `require(application.review)` —— 与审批页**同一个权限点**，不新造权限 |
+| 链接算凭证吗 | **不算。** 泄漏无害：匿名访问 → 303 到登录页；游客 / 普通队员 → 403；只有持 `application.review` 的管理员能打开。把"知道 URL"当成授权才是真漏洞 |
+| 模式 | ① **用名册里已有的呼号**（下拉只列**还没有账号**的队员）② **新建队员**（同时建 `Member(status='active')` + `User(status='active')` + `member` 角色） |
+| 为什么不给模式①选角色 | 收敛权限面：这个页面的职责只是"开账号"，授权走 `/applications` 或 `grant-role` |
+| 并发 | 模式① 在 **POST 时再查一次** `has_account`（TOCTOU），重复开号返回可读 400 |
+| 留痕 | `audit_log(action='member.enroll')`，记呼号、登录名与所用模式 |
+
+**顺带修掉的一条真实安全洞 —— 两个命名空间不得互相冒充**：
+
+`members.callsign`（游戏身份、ACMI 归并键）与 `users.username`（登录名）
+是**两个独立命名空间**，此前交叉冲突完全没人管。而 `Principal.display_name`
+对游客会**回退到 `username`**，于是：**注册一个与名册呼号相同的登录名，
+就能在界面上显示成那个队员**（冒充；且 ACMI 认领按呼号匹配，后续归并也会
+认错人）。现在新增 `gfvfw/services/naming.py` 作为**唯一裁判**
+（大小写不敏感、排除软删除成员、同时比对待审申请的意向呼号），
+三处入口全部改走它：
+
+1. `POST /register` —— 用户名不得等于任何呼号；
+2. `POST /members/new` —— 呼号不得等于任何登录名（此前只查了呼号自身，
+   而且**大小写敏感**，`viper` 能绕过 `Viper`）；
+3. `gfvfw.cli create-member` —— 同样两道检查，并把裸 `IntegrityError`
+   回溯栈换成可读中文报错。
+
+测试：`tests/access_selfcheck.py` §11（`/enroll` 的八种情形：匿名 /
+游客 / 普通队员 / owner、不在导航里、两种模式、重复开号、呼号冲突、
+弱密码、缺 CSRF、审计是否落库、失败时**不得留下半个成员行**）
+与 §12（注册名与呼号的两个方向、大小写不敏感、CLI 报错可读）。
+
+---
+
 ## 6. 功能模块清单
 
 ### 8.2 需求收敛状态
@@ -1197,3 +1238,5 @@ BMS 版本升级可能静默改动格式。因此"解析失败"是**正常分支
 | v2.0 | **三档身份落地：访客 / 游客 / 队员；§4.7 从"5 步人工流水线"收敛为"2 步"（已实现）。** 联队口径：**游客可随意申请、只能查看公开部分；队员由管理员从游客提升上来、可查看仅限队内的资料**。落地要点：(a) **申请即建账号** —— `/apply` 公开提交，同一事务里建 `Application(submitted)` 与 `User(status='pending')`（即游客），**不建 Member**（名册只收队员）；(b) 原设计的"初审 → 发邀请码 → 注册 → 激活"简化为管理员在 `/applications` 一次「提升为队员」（建 Member + 分配 `member` 角色 + `status='active'` + 申请标 `activated`，全在界面完成）；(c) `require_login` 语义**改为"已登录（含游客）"**，新增 `require_member`（队员），二者分工写入 §3；(d) **游客访问队内页面给 403 说明页而非重定向登录页** —— 游客已登录，重定向会形成「点→回登录→再点」死循环，用户看不出差的是"被提升"这一步（新异常 `MemberRequired`）；(e) `/library` 从"无守卫"改为**仅队员**（此前匿名可访问），并修掉首页之外若干页面级泄漏；(f) 开放申请的 R7 兜底：同 IP 每天 ≤5 份、用户名/呼号唯一（与名册及未撤销申请比对）、密码走共用强度校验、CSRF，`source_ip_hash` 只存哈希；(g) 新增 `scripts/list_routes.py` 一条命令列出全部路由及其守卫。**已知残留**：逐条记录的 `visibility`（哪几份资料对公开）仍未落地，见 §2 与二期 |
 | v2.1 | **资质与教官相关功能本轮不做**（联队口径），并据此**收起资质界面**：`.lbk` 不提供资质、系统也从来没有授予入口，留着只会让每个成员页永久显示「暂无资质记录。资质目前由管理员手工录入」——**那句话是假的**，宁可不显示。数据层（`qualification` / `member_qualifications`）与路由查询**完全保留**，将来加回 `members/detail.html` 的资质面板即可。教官角色保留在 `ROLE_DEFINITIONS` 但**不再分配**；因此 §3「教官录入考核结果」**暂缓**，军衔编辑维持**仅指挥/owner** —— 关闭了此前悬置的权限问题。同时新增 `scripts/preflight.py`（上线前预检：可移植性 / 空库建表播种 / 首启 / 生产式配置 / 三档身份在空库上成立 / 备份可用 / 全部模板可编译，31 项）；预检中发现并记录一个**真实行为**：`GFVFW_HTTPS_ONLY=true` 时会话 Cookie 带 `Secure`，走 http:// 的客户端**不会把它带回来**，表现为"登录成功但下一个请求又是匿名的"、CSRF 随之 403 —— 这正是生产必须 HTTPS 的原因，也是本地用 http 冒烟会莫名失败的原因 |
 | v2.2 | **游客权限改口径 + 注册与申请拆成两步**（联队口径：**"游客注册后可查看所有公开的战役管理、飞行纪录、资料、统计数据。注册之后再提交申请成为队员。"**）。上一版的边界是"游客几乎什么都看不见"，这一版改成**列表/汇总开放、详情页与写操作仅队员**：<br>① **拆成两步** —— `GET/POST /register`（**公开**，用户名/密码/邮箱 → 建 `User(status='pending')` 即游客，**不建 Application**、不建 Member，随后**自动登录**）与 `GET/POST /apply`（**改为需要登录**，只填呼号意向/经历/意向/联系方式）。一个表单只做一件事：注册管账号，申请管入队。已登录的人再访问 `/register` 会被送回 `/apply`，避免一个人攒出两个账号。<br>② **列表页放开**：`/members`、`/campaigns`、`/theater`、`/missions`、`/log`、`/log/campaign`、`/log/training`、`/log/pilots`、`/stats`、`/library` 从 `require(权限点)` / `require_member` 改为 `require_login`。游客因此能看到呼号/军衔/飞行时长、飞行员排行榜、战役列表、资料目录。<br>③ **详情页收紧为 `require_member`**：`/members/{id}`、`/campaigns/{id}`、`/missions/{id}`（`/theater/{id}` 及子页沿用 `require(CAMPAIGN_VIEW)`）。<br>④ ⚠️ **本轮最容易漏的一条**：`/log/campaign` 与 `/log/training` 既是对游客开放的列表页，又内嵌了 **ACMI 工作台**（上传/认领/归并/删除）。模板里以 `principal.is_member` 挡掉，**游客拿到的 HTML 里不含这些表单** —— 否则游客会看到"上传 ACMI"的按钮，点了必然 403。`tests/nav_selfcheck.py` §9/§10 与 `tests/access_selfcheck.py` §4 都盯着这条。<br>⑤ 403 说明页重写：不再只说"仅限队员"，而是**列出游客现在能看什么、还差哪一步**，并给出入队申请入口（`message` 里那对 Markdown 星号也顺手去掉了 —— 它是直接插进 HTML 的，星号会原样显示）。<br>⑥ 导航改按身份分档：**已登录（队员+游客）一律显示五个业务区块**，游客额外有「入队申请」「我的申请」；**未登录访客的入口从 `/apply` 改为 `/register`**（`/apply` 现在需要登录，点进去只会被弹回登录页）。<br>⑦ 新增 `User.registration_ip_hash`（注册入口是公开的，需要独立的按 IP 兜底；不能复用 `Application.source_ip_hash`，因为注册时还没有申请）。<br>⑧ 测试：`tests/access_selfcheck.py` 按新口径**重写**（176 项，含"注册不建申请"、"8 个列表页全开"、"详情页 403 而非 303"、"写操作 UI 从 HTML 里消失"、"只注册未申请的账号也能被直接提升"）；`tests/nav_selfcheck.py` 新增 §9/§10（导航分档 + 列表页无写操作 UI）；`scripts/preflight.py` 扩到 **45 项**。<br>⑨ 顺带修掉两个**审计脚本自身的假警报**（它们一直在给错误结论）：`scripts/list_routes.py` 把 `/register` 的 docstring 里提到的 `require_login` 当成了真的守卫（现在先从函数签名取真依赖，再对**剥掉字符串与注释**的源码做正则兜底）；`scripts/audit_authz_callsites.py` 会被路由体里的**内层辅助函数**（如 `def fail(msg)`）抢先命中，把内层签名当路由守卫（现在先定位装饰器、再往后找 `def`，并容忍 `async def`）。修完 `list_routes.py` 与 `audit_authz_callsites.py` 都干净：**37 个 `principal.can()` 调用点，0 个无守卫** |
+| v2.3 | **新增 §5.8 隐藏页 `/enroll`：管理员直接开队员账号**（联队要求"直接注册为队员"）。三档身份的正常路径仍是"注册 → 申请 → 提升"，但联队需要一条**不经申请**的旁路。落地为**固定路径、不进导航、靠权限把门**的 `/enroll`（守卫 `application.review`，与审批页同一权限点）。口径确认并记录：**链接本身不是凭证**，泄漏无害（匿名访问 303→登录页，游客/普通队员 403，只有持该权限的管理员可用）；两种模式 —— ① **用名册里已有的呼号**（下拉只列**还没有账号**的队员，POST 时**再查一次**以防并发重复开号）② **新建队员**（同时建 `Member(status='active')` + `User(status='active')` + `member` 角色）；不提供角色选择（收敛权限面）；成功写 `audit_log(action='member.enroll')`。**顺带修掉一条真实安全洞**：`members.callsign`（游戏身份、ACMI 归并键）与 `users.username`（登录名）是**两个独立命名空间**，此前交叉冲突完全没管 —— 而游客的 `Principal.display_name` 会回退到 `username`，于是**注册一个与名册呼号相同的登录名即可冒充该队员**。新增 `services/naming.py` 作为唯一裁判（大小写不敏感、排除软删除成员、同时比对待审申请的意向呼号），`/register`、`/members/new`、`gfvfw.cli create-member` 三处入口全部改走它；CLI 的重复名不再抛裸 `IntegrityError` 回溯栈，而是给出可读中文报错 |
+| v2.4 | **上传 `.cam` 报 Internal Server Error —— 实为两个缺陷叠加，均已修复**。症状：线上上传战役存档得到光秃秃的 500，没有任何可读信息。根因链：① `.cam` 的实体数组里存在**未初始化的槽位**（全 1 位模式 `0xFFFFFFFF`），按 f32 读**恰好是 NaN**，于是解析出一个 `unit_id=0xFFFF0001`、`id_creator=0xFFFFFFFF`、`z=nan` 的"幽灵单位"；SQLite 没有 NaN，`sqlite3` 驱动把它写成 **NULL**，而 `campaign_units.z` 是 `NOT NULL` ⟹ 入库 `IntegrityError`，整份存档失败。② 真正的"事故放大器"是**失败处理本身**：会话在 flush 失败后进入 **PendingRollback** 状态，而 `theater.py` 的 `fail()` 又拿这个脏会话去查战役列表来渲染页面 ⟹ 二次异常 `PendingRollbackError` 盖掉第一个异常，用户看到 500 而真因一个字都没露。修复：(a) **全链路收敛非有限浮点** —— `camdata._Reader`、`units._R`、`cmpfile.Reader` 的 f32/f64 一律把 NaN/±Inf 归 `0.0`，`state._unit_to_rec` 在**入库前**再兜一道并留下可读告警（只改值、不丢记录 —— 宁可少一个高度，不要少一条数据）；(b) 新增 `state._finite()` 取代 `float(x or 0.0)` 这种写法 —— **`nan or 0.0` 挡不住 NaN**，NaN 是"真值"会原样穿过；(c) `services/campaign._safe_json` 递归把非有限值换成 `null` 并 `allow_nan=False` —— 裸 `NaN` 不是合法 JSON，浏览器 `JSON.parse` 会直接抛错；(d) **所有 `except` 分支必须先 `db.rollback()` 再查询**（改在 `theater.py::fail()` 顶部，覆盖三个调用点）；(e) 新增 `app.exception_handler(Exception)` 兜底 500：记完整堆栈到日志、页面只给一个 8 位**错误编号**与 `journalctl` 查询命令（堆栈本身不外泄）；(f) 新增 `scripts/cam_upload_probe.py`，在真实 HTTP 上确认服务器给的是 303/可读 400 而不是异常页。回归测试写在 `tests/campaign_theater_selfcheck.py` §7 与 §10（**已验证在修复前的代码上会失败**，且失败方式与线上 traceback 一致），断言总数 1215。⚠️ 另记一条**最可能的诱因**：服务器缺 BMS 剧场数据时，`.uni` 单位流靠类表路由，类表缺失会让所有记录退化成"按 Objective 解析"、流一错位就产出这类垃圾记录（见 `deploy/DEPLOY.md` 第 5 节与第 13 节） |
