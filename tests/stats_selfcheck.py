@@ -350,7 +350,8 @@ def test_stats_and_query() -> None:
                 # 只见「飞行员累计」会让单个任务看起来比实际长 N 倍。
                 r = client.get("/")
                 check("概览页可访问", r.status_code == 200, "得到 %d" % r.status_code)
-                check("概览页显示「任务总时长」", "任务总时长" in r.text)
+                check("概览页显示「日志总时长」", "日志总时长" in r.text)
+                check("★ 概览页说明「记录时长」是第三个量", "记录时长" in r.text)
                 check("概览页显示「飞行员累计时长」", "飞行员累计时长" in r.text)
                 check("概览页说明「只算一次」", "只算一次" in r.text)
                 check("概览页显示总航程", "总航程" in r.text)

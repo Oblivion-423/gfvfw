@@ -546,7 +546,7 @@ sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.
 | 删传错的 ACMI（未归并的） | ACMI 工作台 → 上传阶段 →「删除」 | `acmi.upload`（自己的） |
 | 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
 | 上传/更换 Logbook | 账号页 →「我的 Logbook」 | `logbook.upload`（自己的） |
-| 确认 Logbook 声明值写入名册 | 成员档案 → Logbook 页 →「确认写入名册」 | `member.rank.edit`（仅指挥/管理员） |
+| 登记 Logbook 的数值（军衔/累计量） | 账号页 →「我的 Logbook」→ 保存 | `logbook.upload`（自己的）｜ `logbook.upload.any`（代他人） |
 
 两个**有意设计**的约束：
 

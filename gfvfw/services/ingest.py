@@ -234,6 +234,17 @@ class AcmiIngestService:
             "aircraft_std": s.aircraft_standard_name,
             "coalition": s.coalition,
             "flight_seconds": round(s.flight_seconds, 1),
+            # ⚠️ 在空区间（相对秒）—— 「日志时长」的依据，与「记录时长」不同。
+            #    必须持久化：否则确认入库时只能退回用录制时间窗，
+            #    而录制窗含起飞前/降落后，会让"任务占用了多久"偏大。
+            "airborne_start_s": (round(s.airborne_start_relative_s, 1)
+                                 if s.airborne_start_relative_s is not None else None),
+            "airborne_end_s": (round(s.airborne_end_relative_s, 1)
+                               if s.airborne_end_relative_s is not None else None),
+            "first_seen_s": (round(s.first_seen_relative_s, 1)
+                             if s.first_seen_relative_s is not None else None),
+            "last_seen_s": (round(s.last_seen_relative_s, 1)
+                            if s.last_seen_relative_s is not None else None),
             "takeoffs": s.takeoff_count,
             "landings": s.landing_count,
             "distance_m": round(s.distance_meters),
@@ -553,8 +564,25 @@ class AcmiIngestService:
                 at = db.scalar(select(AircraftType).where(AircraftType.name == std_name))
                 at_id = at.id if at else None
 
-            start = rec.recorded_start_at
-            end = rec.recorded_end_at
+            # ---- 该飞行员自己的在空区间（日志时长的依据）----
+            #
+            # ⚠️ 这里曾经把 ``rec.recorded_start_at`` / ``recorded_end_at``
+            #    （= **ACMI 录制时间窗**）直接写进 takeoff_at / landing_at。
+            #    后果：同一文件里**四个飞行员的起降时刻完全相同**，
+            #    于是"任务时长"退化成录制窗宽度（实测 1 小时 13 分），
+            #    而各人实际在空只有约 1 小时 6 分 —— 两个不同的量被混成一个。
+            #
+            # 现在：有在空区间就用它；没有则退回录制窗并标警告。
+            origin = rec.recorded_start_at
+            a_start = info.get("airborne_start_s")
+            a_end = info.get("airborne_end_s")
+            if origin is not None and a_start is not None and a_end is not None:
+                start = origin + timedelta(seconds=float(a_start))
+                end = origin + timedelta(seconds=float(a_end))
+            else:
+                start = rec.recorded_start_at
+                end = rec.recorded_end_at
+
             s = Sortie(
                 mission_id=mission.id,
                 member_id=actor.member_id,

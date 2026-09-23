@@ -2,10 +2,13 @@
 
 页面形态
 --------
-* ``/account/logbook`` —— **成员自助**：上传自己的 ``.lbk``、填写从中读出的声明值、
-  查看自己已归档的文件与名册里已确认的值。
+* ``/account/logbook`` —— **成员自助**：上传自己的 ``.lbk``、填写从 LogbookEditor
+  读出的数值、查看已归档文件与名册里已登记的值。
 * ``/members/{id}/logbook`` —— **代他人**（教官/指挥）：同一套操作，针对指定成员。
-* ``/logbook/{id}/confirm`` —— **确认写入名册**，需要 ``MEMBER_EDIT_RANK``。
+
+⚠️ **没有"审核/确认"环节** —— 联队要求 Logbook 数据直接归档，
+所以 POST ``/logbook/{id}/declare`` 保存时**立即写入名册**
+（``/logbook/{id}/reapply`` 只是把某份历史归档的值再应用一次）。
 
 为什么没有独立的一级菜单
 ------------------------
@@ -73,10 +76,8 @@ def _page_context(db: Session, principal: Principal, member: Member,
         "is_self": is_self,
         "files": files,
         "current": files[0] if files else None,
-        "pending": LB.pending_for_member(db, member.id),
+        "applied": LB.applied_for_member(db, member.id),
         "held_qualification_ids": held,
-        # 能否确认写入名册（敏感变更）
-        "can_confirm": principal.can(MEMBER_EDIT_RANK),
         # 能否上传：自己的看 LOGBOOK_UPLOAD，他人的看 LOGBOOK_UPLOAD_ANY
         "can_upload": principal.can(LOGBOOK_UPLOAD_ANY) or (
             is_self and principal.can(LOGBOOK_UPLOAD)),
@@ -84,7 +85,7 @@ def _page_context(db: Session, principal: Principal, member: Member,
         "status_labels": USER_STATUS_LABELS,
         "max_kb": LB.MAX_LOGBOOK_BYTES // 1024,
         "error": error, "warning": warning, "message": message,
-        # 声明值填入表单时用的是**最新一份归档**的声明
+        # 表单预填用**最新一份归档**的值
         "declared": files[0] if files else None,
     }
     ctx.update(_options(db))
@@ -247,33 +248,44 @@ def declare_values(logbook_id: str, request: Request,
         return RedirectResponse(page + "?error=" + _q(str(exc)), status_code=303)
 
     try:
-        LB.declare(db, rec, rank_id=rank_id.strip() or None,
-                   hours_seconds=hours_seconds, sortie_count=sortie_count,
-                   qualification_ids=qualification_ids)
-        record_audit(db, principal.user.id, "logbook.declare", "logbook_files",
-                     rec.id,
-                     after={"rank_id": rec.declared_rank_id,
-                            "hours_seconds": rec.declared_hours_seconds,
-                            "sorties": rec.declared_sorties,
-                            "qualifications": rec.declared_qualification_ids()},
-                     reason="填写 Logbook 声明值（尚未写入名册）",
+        summary = LB.declare(db, rec, rank_id=rank_id.strip() or None,
+                             hours_seconds=hours_seconds,
+                             sortie_count=sortie_count,
+                             qualification_ids=qualification_ids,
+                             apply_now=True,
+                             actor_user_id=principal.user.id,
+                             actor_role=principal.primary_role)
+        # 按联队要求：Logbook 数据**直接归档，不需要审核** ——
+        # 所以这一步就已经写入名册，审计记的是"改前/改后"而不是"待确认"。
+        record_audit(db, principal.user.id, "logbook.apply", "members",
+                     rec.member_id,
+                     before=summary.get("before"), after=summary.get("after"),
+                     reason="按 Logbook 登记名册记录：%s"
+                            % ("、".join(summary.get("changed") or []) or "无变化"),
                      actor_role=principal.primary_role, request=request)
         db.commit()
     except LB.LogbookError as exc:
         db.rollback()
         return RedirectResponse(page + "?error=" + _q(str(exc)), status_code=303)
 
-    return RedirectResponse(page + "?did=declared", status_code=303)
+    if summary.get("no_change"):
+        return RedirectResponse(page + "?did=nothing", status_code=303)
+    return RedirectResponse(page + "?did=applied", status_code=303)
 
 
 # --------------------------------------------------------------------------
-# 确认写入名册
+# 重新写入名册（把历史归档的值再应用一次）
 # --------------------------------------------------------------------------
+#
+# ⚠️ 这里**没有独立的"审核/确认"步骤** —— 联队要求 Logbook 数据直接归档。
+#    保存在 :func:`declare_values` 里就已经写入名册了。
+#    本路由只是"把某份历史归档的值重新应用一次"（例如名册被别处改过、
+#    或换回了旧档），同样直接生效。
 
-@router.post("/logbook/{logbook_id}/confirm")
-def confirm(logbook_id: str, request: Request,
+@router.post("/logbook/{logbook_id}/reapply")
+def reapply(logbook_id: str, request: Request,
             csrf_token: str = Form(""),
-            principal: Principal = Depends(require(MEMBER_EDIT_RANK)),
+            principal: Principal = Depends(require_login),
             db: Session = Depends(get_db)):
 
     verify_csrf(request, csrf_token)
@@ -281,17 +293,20 @@ def confirm(logbook_id: str, request: Request,
     if rec is None:
         raise HTTPException(status_code=404, detail="归档记录不存在")
 
-    page = "/members/%s/logbook" % rec.member_id
-    if principal.member is not None and rec.member_id == principal.member.id:
-        page = "/account/logbook"
+    is_self = principal.member is not None and rec.member_id == principal.member.id
+    if not (is_self and principal.can(LOGBOOK_UPLOAD)) \
+            and not principal.can(LOGBOOK_UPLOAD_ANY):
+        raise HTTPException(status_code=403, detail="没有权限操作这份归档")
+
+    page = "/account/logbook" if is_self else "/members/%s/logbook" % rec.member_id
 
     try:
-        summary = LB.confirm_logbook(db, rec, actor_user_id=principal.user.id,
+        summary = LB.apply_to_roster(db, rec, actor_user_id=principal.user.id,
                                      actor_role=principal.primary_role)
-        record_audit(db, principal.user.id, "logbook.confirm", "members",
+        record_audit(db, principal.user.id, "logbook.apply", "members",
                      summary["member_id"],
                      before=summary["before"], after=summary["after"],
-                     reason="按 Logbook 确认名册记录：%s"
+                     reason="重新应用 Logbook 归档的值：%s"
                             % ("、".join(summary["changed"]) or "无变化"),
                      actor_role=principal.primary_role, request=request)
         db.commit()
@@ -301,7 +316,7 @@ def confirm(logbook_id: str, request: Request,
 
     if summary["no_change"]:
         return RedirectResponse(page + "?did=nothing", status_code=303)
-    return RedirectResponse(page + "?did=confirmed", status_code=303)
+    return RedirectResponse(page + "?did=applied", status_code=303)
 
 
 # --------------------------------------------------------------------------

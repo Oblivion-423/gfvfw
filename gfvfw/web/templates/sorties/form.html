@@ -79,7 +79,7 @@
     {% set mnt = ((form.flight_seconds % 3600) // 60) if form.flight_seconds else 0 %}
     {% set sec = (form.flight_seconds % 60) if form.flight_seconds else 0 %}
     <div class="field">
-      <label>飞行时长</label>
+      <label>日志时长（在空）</label>
       <div class="row" style="gap:6px;align-items:center">
         <input type="number" name="hours" style="width:80px" min="0" max="1000"
                value="{{ h }}"> 时

@@ -20,15 +20,17 @@
 
 {% if sortie_count %}
 <div class="flash warn">
-  <strong>关于「任务时长」：</strong>它由各架次的在空区间算出（多人同飞只算一次），
+  <strong>关于两个时长：</strong><br>
+  <b>「日志时长」</b>由各架次的<b>在空区间</b>算出（多人同飞只算一次），
   当前为 <strong>{{ mission.duration_seconds|dur }}</strong>。
-  <b>改动下面的开始/结束时间<u>不会</u>改变它</b> —— 时间窗用于展示与筛选，
-  要改实际时长，请编辑对应架次。<br>
-  <span class="small">本任务有 {{ sortie_count }} 条架次。</span>
+  <b>改动下面的开始/结束时间<u>不会</u>改变它</b> —— 要改实际飞行时间，请编辑对应架次。<br>
+  <b>「记录时长」</b>取的正是下面的开始/结束时间之差（ACMI 录制窗，含起飞前/降落后），
+  改动它会改变记录时长。<br>
+  <span class="small">本任务有 {{ sortie_count }} 条架次。两者含义不同，不要互相校验。</span>
 </div>
 {% else %}
 <div class="flash info">
-  本任务还没有架次，因此「任务时长」直接取下面的开始/结束时间之差。
+  本任务还没有架次，因此下面的开始/结束时间之差同时作为<b>记录时长</b>与<b>日志时长</b>的兜底值。
 </div>
 {% endif %}
 
@@ -63,16 +65,18 @@
       </select>
     </div>
     <div class="field">
-      <label for="started_at">开始（{{ DISPLAY_TZ_LABEL }}）</label>
+      <label for="started_at">开始（{{ DISPLAY_TZ_LABEL }}）· <b>记录时间窗</b></label>
       <input type="datetime-local" id="started_at" name="started_at"
              value="{{ form.started_at }}">
     </div>
     <div class="field">
-      <label for="ended_at">结束（{{ DISPLAY_TZ_LABEL }}）</label>
+      <label for="ended_at">结束（{{ DISPLAY_TZ_LABEL }}）· <b>记录时间窗</b></label>
       <input type="datetime-local" id="ended_at" name="ended_at"
              value="{{ form.ended_at }}">
       {% if not sortie_count %}
-        <span class="hint">本任务无架次，改动时间会重算任务时长</span>
+        <span class="hint">本任务无架次，改动时间会重算时长</span>
+      {% else %}
+        <span class="hint">改动这里只改变「记录时长」，不影响「日志时长」</span>
       {% endif %}
     </div>
     <div class="field">

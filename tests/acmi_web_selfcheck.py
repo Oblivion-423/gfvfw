@@ -401,13 +401,13 @@ def main() -> int:
                 _person_sum = sum(int(s.flight_seconds or 0) for s in _ms)
                 from gfvfw.services.stats import mission_flight_seconds
                 _once = mission_flight_seconds(db, [mission.id])[mission.id]
-                check("任务时长 == 读取时算得的一次值",
+                check("日志时长 == 读取时算得的一次值",
                       mission.duration_seconds == _once,
                       "存值 %s 算得 %s" % (mission.duration_seconds, _once))
-                check("任务时长远小于人次之和（只算一次）",
+                check("日志时长远小于人次之和（只算一次）",
                       mission.duration_seconds < _person_sum,
                       "任务 %s 人次和 %s" % (mission.duration_seconds, _person_sum))
-                check("任务时长 ≈ 单人时长（两人同飞不翻倍）",
+                check("日志时长 ≈ 单人时长（两人同飞不翻倍）",
                       _person_sum and abs(mission.duration_seconds
                                           - _person_sum / len(_ms)) < 120,
                       "任务 %s 单人均值 %s"
@@ -450,7 +450,9 @@ def main() -> int:
                 check("任务详情可访问", r.status_code == 200)
                 check("详情显示参战架次", "参战架次" in r.text)
                 # 任务维度与飞行员维度是两个口径，标签必须都在
-                check("详情显示任务时长（只算一次）", "任务时长" in r.text)
+                check("详情显示日志时长（只算一次）", "日志时长" in r.text)
+                check("★ 详情同时显示记录时长（录制窗）", "记录时长" in r.text)
+                check("★ 详情说明三个时长不要互相校验", "不要互相校验" in r.text)
                 check("详情显示飞行员累计（人次口径）", "飞行员累计" in r.text)
                 check("详情列出飞行员", "Oblivion" in r.text)
                 check("详情含归档文件区", "归档文件" in r.text)

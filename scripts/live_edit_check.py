@@ -121,7 +121,7 @@ def main() -> int:
     print("\n[2] 导航与列表页")
     status, html = s.get("/")
     check("概览页 / 200", status == 200, f"status={status}")
-    check("概览页出现「任务总时长」", "任务总时长" in html)
+    check("概览页出现「日志总时长」", "日志总时长" in html)
     check("概览页出现「飞行员累计时长」", "飞行员累计时长" in html)
     check("概览页说明「只算一次」", "只算一次" in html)
     check("概览页文案未过期（不再说 ACMI 入口已移除）",
@@ -129,7 +129,7 @@ def main() -> int:
 
     status, html = s.get("/stats")
     check("统计总览 200", status == 200, f"status={status}")
-    check("统计总览出现「任务总时长」", "任务总时长" in html)
+    check("统计总览出现「日志总时长」", "日志总时长" in html)
     check("统计总览出现「飞行员累计时长」", "飞行员累计时长" in html)
 
     status, html = s.get("/missions")
@@ -145,8 +145,13 @@ def main() -> int:
     print(f"\n[3] 任务详情 /missions/{mid}")
     status, html = s.get(f"/missions/{mid}")
     check("任务详情 200", status == 200, f"status={status}")
-    check("详情页显示「任务时长」", "任务时长" in html)
-    check("详情页显示「飞行员累计」", "飞行员累计" in html)
+    check("★ 详情区分「日志时长」", "日志时长" in html)
+    check("★ 详情区分「记录时长」", "记录时长" in html)
+    check("详情显示「飞行员累计」", "飞行员累计" in html)
+    check("★ 详情说明三个时长不要互相校验", "不要互相校验" in html)
+    check("详情注明记录时长含起飞前/降落后",
+          "起飞前" in html or "降落后" in html)
+    check("详情不再把录制窗叫作「任务时长」", "任务时长" not in html)
     has_edit = f"/missions/{mid}/edit" in html
     has_del = f"/missions/{mid}/delete" in html
     has_add = f"/missions/{mid}/sorties/new" in html
@@ -158,7 +163,7 @@ def main() -> int:
     status, html = s.get(f"/missions/{mid}/edit")
     check("GET 任务编辑页 200", status == 200, f"status={status}")
     check("编辑表单含 csrf_token", 'name="csrf_token"' in html)
-    check("编辑页提示任务时长不受时间窗影响", "任务时长" in html)
+    check("★ 编辑页区分日志时长与记录时长", "日志时长" in html and "记录时长" in html)
 
     status, html = s.get(f"/missions/{mid}/delete")
     check("GET 任务删除确认页 200", status == 200, f"status={status}")
@@ -188,6 +193,8 @@ def main() -> int:
     status, html = s.get("/log/campaign")
     check("GET /log/campaign 200", status == 200, f"status={status}")
     check("战役记录页含 ACMI 工作台", "acmiWorkbench" in html or "ACMI 工作台" in html)
+    check("★ 战役记录用「日志总时长」", "日志总时长" in html)
+    check("★ 战役记录说明它不是记录时长", "记录时长" in html)
 
     status, html = s.get("/log/training")
     check("GET /log/training 200", status == 200, f"status={status}")
@@ -196,8 +203,12 @@ def main() -> int:
     #    因此「只算一次」的说明只在有数据时才存在。两种情形都算通过。
     empty = ("暂无" in html) or ("为空" in html) or ("没有" in html)
     check("训练记录页：有数据则标注只算一次，无数据则给空状态提示",
-          ("只算一次" in html) or ("任务总时长" in html) or empty,
+          ("只算一次" in html) or ("日志总时长" in html) or empty,
           "既无合计说明也无空状态")
+
+    status, html = s.get("/")
+    check("★ 概览页用「日志总时长」", "日志总时长" in html)
+    check("★ 概览页说明还有第三个量「记录时长」", "记录时长" in html)
 
     print("\n[7] 旧 ACMI 路径应 302 跳转到宿主页（不跟随后最终 200）")
     for old in ("/acmi", "/acmi/upload", "/acmi/claim", "/acmi/merge"):
@@ -290,18 +301,24 @@ def main() -> int:
     status, html = s.get("/account/logbook")
     check("GET /account/logbook 200", status == 200, f"status={status}")
     check("页面说明文件不会自动读取", "不会自动读取" in html)
-    check("页面说明 Logbook 与 ACMI 口径不同", "口径不同" in html)
+    check("页面说明三个时长不要互相校验", "不要互相校验" in html)
     check("页面含上传表单", 'enctype="multipart/form-data"' in html)
     # ⚠️ 只读探针：**不上传任何文件**（上传会写库、写磁盘）。
     #    这里只验证页面契约与权限边界。
     status, html = s.get("/members/00000000-0000-0000-0000-000000000000/logbook")
     check("不存在的成员 Logbook 页 404", status == 404, f"status={status}")
     token = s.csrf("/account/logbook") or ""
-    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/confirm", {})
-    check("无 CSRF 的 Logbook 确认被拒（403）", status == 403, f"status={status}")
+    # ⚠️ 按联队要求 Logbook **不需要审核**，所以没有 /confirm 路由；
+    #    数值随保存直接写入名册（/declare）。
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/declare",
+                       {"hours": "1"})
+    check("无 CSRF 的 Logbook 保存被拒（403）", status == 403, f"status={status}")
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/declare",
+                       {"csrf_token": token, "hours": "1"})
+    check("不存在的归档保存 404", status == 404, f"status={status}")
     status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/confirm",
                        {"csrf_token": token})
-    check("不存在的归档确认 404", status == 404, f"status={status}")
+    check("★ 已无 /confirm 审核路由（404）", status == 404, f"status={status}")
     status, _ = s.get("/logbook/00000000-0000-0000-0000-000000000000/download")
     check("不存在的归档下载 404", status == 404, f"status={status}")
 

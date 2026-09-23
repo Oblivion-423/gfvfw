@@ -48,8 +48,20 @@
   <h2 style="margin-top:0">概览</h2>
   <div class="stat-row">
     <div class="stat"><span class="v">{{ sorties|length }}</span><span class="k">参战架次</span></div>
-    {# ⚠️ 任务时长只算一次；飞行员累计是各人之和（人次）。两者含义不同。 #}
-    <div class="stat"><span class="v">{{ agg.flight_once|dur }}</span><span class="k">任务时长</span></div>
+    {#
+      ⚠️ 三个时长是两个不同的量，标签必须写全，不要合并：
+
+      * 日志时长 —— 各架次**在空区间**的并集，多人同飞只算一次
+      * 记录时长 —— ACMI **录制时间窗**宽度（含起飞前 / 降落后），必然 ≥ 日志时长
+      * 飞行员累计 —— 各人在空时长**相加**（人次）
+
+      实测同一任务：日志时长 1小时7分 / 记录时长 1小时13分 / 飞行员累计 4小时24分。
+      早期把「任务时长」直接标在录制窗口上，等于把两个量混成一个。
+    #}
+    <div class="stat"><span class="v">{{ agg.flight_once|dur }}</span><span class="k">日志时长</span></div>
+    {% if agg.recording_seconds %}
+    <div class="stat"><span class="v">{{ agg.recording_seconds|dur }}</span><span class="k">记录时长</span></div>
+    {% endif %}
     <div class="stat"><span class="v">{{ agg.flight|dur }}</span><span class="k">飞行员累计</span></div>
     <div class="stat"><span class="v">{{ agg.distance|distance }}</span><span class="k">总航程</span></div>
     <div class="stat"><span class="v">{{ agg.weapons }}</span><span class="k">武器投放</span></div>
@@ -57,8 +69,10 @@
     <div class="stat"><span class="v">{{ agg.landings }}/{{ agg.takeoffs }}</span><span class="k">降落/起飞</span></div>
   </div>
   <div class="small muted" style="margin-top:10px">
-    「任务时长」= 本任务占用的时间（多人同时飞只算一次）；
-    「飞行员累计」= 各人参战时长之和。下方架次明细里的每行是各人自己的时长。
+    <strong>三个时长的口径不同，不要互相校验：</strong><br>
+    「日志时长」= 各架次<b>在空区间</b>的并集，多人同飞只算一次 —— 即本任务实际飞了多久；<br>
+    「记录时长」= ACMI <b>录制时间窗</b>的宽度，含起飞前与降落后，所以必然 ≥ 日志时长；<br>
+    「飞行员累计」= 各人在空时长<b>相加</b>（人次）。下方架次明细里的每行是各人自己的日志时长。
   </div>
 </div>
 
@@ -69,7 +83,7 @@
     <thead>
       <tr>
         <th>飞行员</th><th>机型</th><th>阵营</th>
-        <th class="num">时长</th><th class="num">航程</th>
+        <th class="num">日志时长</th><th class="num">航程</th>
         <th class="num">起降</th><th class="num">武器</th>
         <th>状态</th><th>数据</th><th></th>
       </tr>

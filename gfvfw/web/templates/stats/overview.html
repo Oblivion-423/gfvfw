@@ -25,11 +25,12 @@
 <div class="panel">
   <h2 style="margin-top:0">总体</h2>
   {# ⚠️ 两个时长口径含义不同，必须分别标注：
-       「任务总时长」= 每个任务只算一次（多人同飞不重复计）
-       「飞行员累计」= 各人架次之和（人次），必然 >= 前者 #}
+       「日志总时长」= 每个任务的在空并集只算一次（多人同飞不重复计）
+       「飞行员累计时长」= 各人架次之和（人次），必然 >= 前者
+     第三个量「记录时长」（ACMI 录制窗）在任务详情页，不在总览里。 #}
   <div class="stat-row">
     <div class="stat"><span class="v">{{ ov.sorties }}</span><span class="k">总架次</span></div>
-    <div class="stat"><span class="v">{{ ov.flight_seconds|dur }}</span><span class="k">任务总时长</span></div>
+    <div class="stat"><span class="v">{{ ov.flight_seconds|dur }}</span><span class="k">日志总时长</span></div>
     <div class="stat"><span class="v">{{ ov.pilot_flight_seconds|dur }}</span><span class="k">飞行员累计时长</span></div>
     <div class="stat"><span class="v">{{ ov.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
     <div class="stat"><span class="v">{{ ov.missions }}</span><span class="k">任务数</span></div>
@@ -37,9 +38,11 @@
     <div class="stat"><span class="v">{{ ov.recent_30d_flight|dur }}</span><span class="k">近 30 天时长</span></div>
   </div>
   <div class="small muted" style="margin-top:10px">
-    「任务总时长」按任务计 —— 多人飞同一任务只算一次；
-    「飞行员累计时长」按人计 —— 是各人参战时长之和，因此 ≥ 前者。
-    排行榜与个人记录用的是按人口径。
+    <b>「日志总时长」</b>按任务计 —— 各架次<b>在空区间</b>取并集，多人飞同一任务只算一次；
+    <b>「飞行员累计时长」</b>按人计 —— 是各人参战时长之和，因此 ≥ 前者。
+    排行榜与个人记录用的是按人口径。<br>
+    另有一个<b>「记录时长」</b>（ACMI 录制时间窗，含起飞前/降落后）在任务详情页 ——
+    它与上面两个都不是同一个量，<b>不要互相校验</b>。
   </div>
 </div>
 
@@ -64,7 +67,7 @@
         <th style="width:44px" class="num">#</th>
         <th>呼号</th><th>状态</th>
         <th class="num">架次</th>
-        <th class="num">总时长</th>
+        <th class="num">日志时长</th>
         <th class="num">平均时长</th>
         <th class="num">总航程</th>
         <th class="num">起降</th>
@@ -103,7 +106,7 @@
   <div style="padding:16px 18px 0"><h2 style="margin:0">机型分布</h2></div>
   <table>
     <thead><tr><th>ACMI 机型名</th><th>标准机型</th>
-               <th class="num">架次</th><th class="num">总时长</th><th class="num">总航程</th></tr></thead>
+               <th class="num">架次</th><th class="num">日志时长</th><th class="num">总航程</th></tr></thead>
     <tbody>
       {% for a in aircraft %}
       <tr>
@@ -125,7 +128,7 @@
 <div class="panel" style="padding:0;overflow:hidden">
   <div style="padding:16px 18px 0"><h2 style="margin:0">任务类型</h2></div>
   <table>
-    <thead><tr><th>类型</th><th class="num">任务数</th><th class="num">架次</th><th class="num">总时长</th></tr></thead>
+    <thead><tr><th>类型</th><th class="num">任务数</th><th class="num">架次</th><th class="num">日志时长</th></tr></thead>
     <tbody>
       {% for t in mission_types %}
       <tr>

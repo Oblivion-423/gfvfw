@@ -348,12 +348,16 @@ def mission_detail(mission_id: str, request: Request,
         agg["takeoffs"] += s.takeoff_count or 0
         agg["landings"] += s.landing_count or 0
 
-    # ⚠️ 任务的「总飞行时长」**只算一次**：多人飞同一任务时，上面的
-    #    agg["flight"] 若按人次相加会把同一段时间重复计数（4 人各 1 小时
-    #    → 4 小时，而任务只历时 1 小时 13 分）。改用各架次在空区间的并集。
-    #    下方架次表里的每行时长仍是**各人**的，两者含义不同，标签已区分。
-    from ...services.stats import mission_flight_seconds
+    # ⚠️ 这里有两个**不同的量**，标签必须分开（pages 上也写明了口径）：
+
+    #    ① 日志时长：各架次「在空区间」的并集 —— 多人同飞只算一次。
+    #       上面的 agg["flight"] 是**人次相加**（飞行员累计），不能当任务时长用。
+    #    ② 记录时长：ACMI 录制时间窗的宽度（含起飞前/降落后），必然 ≥ 日志时长。
+    #       它来自文件录制窗，与"飞了多久"不是一回事。
+    from ...services.stats import mission_flight_seconds, mission_recording_seconds
     agg["flight_once"] = mission_flight_seconds(db, [mission.id]).get(mission.id, 0)
+    agg["recording_seconds"] = mission_recording_seconds(
+        db, [mission.id]).get(mission.id, 0)
 
     files = list(db.scalars(
         select(AcmiFile).where(AcmiFile.mission_id == mission.id)

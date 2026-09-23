@@ -40,7 +40,7 @@
   <div class="stat-row">
     <div class="stat">
       <span class="v">{{ stats.flight_seconds | dur }}</span>
-      <span class="k">任务总时长</span>
+      <span class="k">日志总时长</span>
     </div>
     <div class="stat">
       <span class="v">{{ stats.pilot_flight_seconds | dur }}</span>
@@ -53,9 +53,12 @@
   </div>
   <p class="small muted" style="margin:10px 0 0">
     <strong>两个时长口径不同，不是数据错误：</strong>
-    「任务总时长」按任务计 —— <strong>多人飞同一任务只算一次</strong>；
+    「日志总时长」按任务计 —— 各架次<b>在空区间</b>取并集，<strong>多人飞同一任务只算一次</strong>；
     「飞行员累计时长」按人计 —— 是各人参战时长之和，因此 ≥ 前者。
     细分见 <a href="/stats">统计</a>。
+    <br>
+    另有第三个量<b>「记录时长」</b>（ACMI 录制时间窗，含起飞前/降落后），
+    只出现在任务详情与 ACMI 工作台 —— 与上面两个都不是同一个量，<b>不要互相校验</b>。
   </p>
 </div>
 

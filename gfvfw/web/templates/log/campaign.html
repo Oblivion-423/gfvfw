@@ -53,12 +53,13 @@
   <div class="stat-row">
     <div class="stat"><span class="v">{{ totals.missions }}</span><span class="k">任务数</span></div>
     <div class="stat"><span class="v">{{ totals.sorties }}</span><span class="k">总架次</span></div>
-    <div class="stat"><span class="v">{{ totals.flight_seconds|dur }}</span><span class="k">任务总时长</span></div>
+    <div class="stat"><span class="v">{{ totals.flight_seconds|dur }}</span><span class="k">日志总时长</span></div>
     <div class="stat"><span class="v">{{ totals.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
     <div class="stat"><span class="v">{{ totals.deaths }}</span><span class="k">战损</span></div>
   </div>
   <div class="small muted" style="margin-top:8px">
-    时长按<b>任务</b>计 —— 多人飞同一任务只算一次（与下方每行一致）。
+    <b>「日志总时长」</b>按<b>任务</b>计 —— 各架次<b>在空区间</b>取并集，多人飞同一任务只算一次（与下方每行一致）。
+    它与 ACMI 的<b>「记录时长」</b>（录制时间窗，含起飞前/降落后）不是同一个量，不要互相校验。
   </div>
 </div>
 
@@ -66,7 +67,7 @@
   <table>
     <thead>
       <tr><th>任务时间（UTC+8）</th><th>任务</th><th>战役</th><th>战区</th><th>类型</th>
-          <th class="num">架次</th><th class="num">任务时长</th>
+          <th class="num">架次</th><th class="num">日志时长</th>
           <th class="num">航程</th><th class="num">战损</th><th>ACMI</th></tr>
     </thead>
     <tbody>

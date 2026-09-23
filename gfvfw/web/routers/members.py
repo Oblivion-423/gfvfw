@@ -244,7 +244,7 @@ def member_detail(member_id: str, request: Request,
         "can_manage": principal.can(MEMBER_EDIT),
         # Logbook 归档（本页只显示摘要 + 入口，完整操作在专用页面）
         "logbook_count": len(LB.list_for_member(db, member.id)),
-        "logbook_pending": len(LB.pending_for_member(db, member.id)),
+        "logbook_applied": LB.applied_for_member(db, member.id) is not None,
         "can_manage_logbook": principal.can(LOGBOOK_UPLOAD_ANY),
     })
 

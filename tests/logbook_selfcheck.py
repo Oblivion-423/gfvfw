@@ -1,14 +1,14 @@
 """
-自校验：**BMS Logbook 上传与名册同步**。
+自校验：**BMS Logbook 上传与名册登记**（不需要审核）。
 
-覆盖需求 §4.7/§4.8/§8.1 与 R12 的落地方式：
+联队口径：**Logbook 里的数据直接归档，不设审核步骤。**
+所以本套测试的重点从"确认流程"改成：
 
-* 成员可上传**自己的** ``.lbk``（归档、SHA256 去重、可下载、可删除重传）
-* 成员填写的声明值**不直接影响名册** —— 否则任何成员都能自封飞行时数
-* 只有具备 ``member.rank.edit`` 的人（指挥/管理员）能**确认写入名册**
-* 确认时资质**只同步 ``source='logbook'`` 的那一批**，
-  手动授予的资质不会被一次确认抹掉
-* 权限边界在服务端强制（无权限者构造请求得 403），页面上只是隐藏按钮
+* 成员上传**自己的** ``.lbk``（归档、SHA256 去重、可下载、可删除重传）
+* 保存数值时**立刻写入名册**（没有"待确认"中间态）
+* 写入值一律标 ``source='logbook'``，并记录填写人与时间（可追溯）
+* 权限边界在服务端强制（无权限者构造请求得 403）
+* Logbook 累计时长 / 日志时长 / 记录时长是**三个不同的量**，页面上分别标注
 
 运行:
     .venv\\Scripts\\python.exe tests\\logbook_selfcheck.py
@@ -119,7 +119,7 @@ def write_lbk(tmpdir: Path, name: str = "Oblivion.lbk",
 
 def main() -> int:
     print("=" * 74)
-    print("BMS Logbook 上传与名册同步自校验")
+    print("BMS Logbook 上传与名册登记自校验（直接归档，无审核）")
     print("=" * 74)
 
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
@@ -133,7 +133,7 @@ def main() -> int:
                 ins_mid, ins_uid = make_user(db, "Instructor", "instructor")
                 ranks = list(db.scalars(select(Rank).order_by(Rank.level)).all())
                 rank_low, rank_high = ranks[0], ranks[-1]
-                # 手工授予的资质（用于验证"确认不会抹掉它"）
+                # 手工授予的资质（用于验证"登记不会抹掉它"）
                 q_manual = Qualification(name="手工-长机", category="role", level=9)
                 q_log = Qualification(name="Logbook-僚机", category="role", level=5)
                 db.add_all([q_manual, q_log])
@@ -142,6 +142,7 @@ def main() -> int:
                 db.add(MemberQualification(member_id=mem_mid,
                                            qualification_id=q_manual_id,
                                            source="manual"))
+                # 另一个成员也有一份归档，用于验下载/管理权限
                 db.commit()
 
             # ---------------- 服务层：存储校验 ----------------
@@ -183,7 +184,6 @@ def main() -> int:
                       rec1.stored_path.startswith("logbook/"), rec1.stored_path)
                 check("原件确实写到了磁盘", LB.absolute_path(rec1).exists())
 
-                # 同一成员重复上传完全相同的文件 → 去重
                 rec2, warn2 = LB.store_upload(db, mem_mid, "Oblivion.lbk", src,
                                               uploaded_by=mem_uid)
                 db.commit()
@@ -192,129 +192,82 @@ def main() -> int:
                 check("同一成员只有一条记录",
                       len(LB.list_for_member(db, mem_mid)) == 1)
 
-                # 体积异常 → 警告但不拒绝
                 odd = write_lbk(tdp, "odd.lbk", b"y" * 1000)
                 rec3, warn3 = LB.store_upload(db, mem_mid, "odd.lbk", odd,
                                               uploaded_by=mem_uid)
                 db.commit()
                 check("体积异常仍归档（只是警告）", rec3.id and bool(warn3))
-                check("不同内容→新增一条记录",
-                      len(LB.list_for_member(db, mem_mid)) == 2)
 
-                # 另一个成员可以上传**同样内容**的文件（唯一约束是按成员的）
-                rec_other, _ = LB.store_upload(db, mem_mid, "dup.lbk", src,
-                                               uploaded_by=mem_uid)
-                db.commit()
-                check("跨成员不互相去重（约束是 member_id+sha256）",
-                      rec_other.id == rec1.id)
                 rec_owner, _ = LB.store_upload(db, owner_mid, "Oblivion.lbk", src,
                                                uploaded_by=owner_uid)
                 db.commit()
                 check("★ 别的成员上传同一份文件会新建记录",
                       rec_owner.id != rec1.id)
                 rec_owner_id = rec_owner.id
+                rec1_id = rec1.id
 
-            # ---------------- 服务层：声明与确认 ----------------
-            print("\n[2] 声明值：校验")
+            # ---------------- 服务层：直接登记 ----------------
+            print("\n[2] ★ 保存即写入名册（没有「待确认」中间态）")
             with TestSession() as db:
-                rec = LB.get(db, rec1.id)
-                try:
-                    LB.declare(db, rec, rank_id="not-a-real-rank")
-                    check("非法军衔被拒", False, "竟然通过了")
-                except LB.LogbookError:
-                    check("非法军衔被拒", True)
-                db.rollback()
+                rec = LB.get(db, rec1_id)
+                check("尚未登记时 has_declaration 为假", not rec.has_declaration())
+                check("尚未登记时未写入名册", not rec.is_confirmed)
 
-                rec = LB.get(db, rec1.id)
-                try:
-                    LB.declare(db, rec, hours_seconds=-1)
-                    check("负时长被拒", False, "竟然通过了")
-                except LB.LogbookError:
-                    check("负时长被拒", True)
-                db.rollback()
-
-                rec = LB.get(db, rec1.id)
-                try:
-                    LB.declare(db, rec, qualification_ids=["bogus-id"])
-                    check("非法资质被拒", False, "竟然通过了")
-                except LB.LogbookError:
-                    check("非法资质被拒", True)
-                db.rollback()
-
-                rec = LB.get(db, rec1.id)
-                check("尚未声明时 has_declaration 为假", not rec.has_declaration())
-                LB.declare(db, rec, rank_id=rank_high.id, hours_seconds=3600 * 123,
-                           sortie_count=456, qualification_ids=[q_log_id])
+                summary = LB.declare(db, rec, rank_id=rank_high.id,
+                                     hours_seconds=3600 * 123, sortie_count=456,
+                                     qualification_ids=[q_log_id],
+                                     actor_user_id=mem_uid)
                 db.commit()
-                rec = LB.get(db, rec1.id)
-                check("声明后 has_declaration 为真", rec.has_declaration())
-                check("声明了军衔", rec.declared_rank_id == rank_high.id)
-                check("声明了时长", rec.declared_hours_seconds == 3600 * 123)
-                check("声明了架次", rec.declared_sorties == 456)
-                check("声明了资质", rec.declared_qualification_ids() == [q_log_id])
-                check("0 小时是合法值（与「未填」不同）",
-                      LB.declare(db, rec, hours_seconds=0) is None
-                      and rec.declared_hours_seconds == 0)
-                db.rollback()
 
-            print("\n[3] ★ 声明值不直接影响名册")
-            with TestSession() as db:
+                check("declare 返回了变更摘要", bool(summary.get("changed")))
                 m = db.get(Member, mem_mid)
-                check("声明后名册军衔仍未变", m.rank_id is None,
+                check("★ 军衔已立即写入名册", m.rank_id == rank_high.id,
                       "rank_id=%s" % m.rank_id)
-                check("声明后名册累计时长仍未变",
-                      m.logbook_hours_seconds is None)
-                check("声明后名册累计架次仍未变", m.logbook_sorties is None)
-                check("待确认列表里能看到这份归档",
-                      [r.id for r in LB.pending_for_member(db, mem_mid)] == [rec1.id])
-                check("全站待确认计数 >= 1", LB.pending_count(db) >= 1)
-
-            print("\n[4] ★ 确认写入名册（只同步 logbook 来源的资质）")
-            with TestSession() as db:
-                rec = LB.get(db, rec1.id)
-                LB.declare(db, rec, rank_id=rank_high.id,
-                           hours_seconds=3600 * 123, sortie_count=456,
-                           qualification_ids=[q_log_id])
-                db.commit()
-                rec = LB.get(db, rec1.id)
-                summary = LB.confirm_logbook(db, rec, actor_user_id=cmd_uid,
-                                             actor_role="commander")
-                db.commit()
-
-                m = db.get(Member, mem_mid)
-                check("军衔已写入", m.rank_id == rank_high.id)
                 check("军衔来源标为 logbook", m.rank_source == "logbook")
-                check("军衔变更人已记录", m.rank_updated_by == cmd_uid)
-                check("累计时长已写入", m.logbook_hours_seconds == 3600 * 123)
-                check("累计架次已写入", m.logbook_sorties == 456)
+                check("军衔变更人已记录", m.rank_updated_by == mem_uid)
+                check("★ 累计时长已立即写入", m.logbook_hours_seconds == 3600 * 123)
+                check("★ 累计架次已立即写入", m.logbook_sorties == 456)
                 check("登记时间已记录", m.logbook_updated_at is not None)
-                check("确认时间已记录", rec.confirmed_at is not None)
-                check("确认人已记录", rec.confirmed_by == cmd_uid)
-                check("变更摘要含军衔", "军衔" in summary["changed"], str(summary))
-                check("变更摘要含累计飞行时长", "累计飞行时长" in summary["changed"])
+                check("归档标为已写入名册", rec.is_confirmed)
+                check("写入时刻已记录", rec.confirmed_at is not None)
 
                 quals = {q.qualification_id: q for q in db.scalars(
                     select(MemberQualification)
                     .where(MemberQualification.member_id == mem_mid)).all()}
                 check("logbook 资质已写入", q_log_id in quals)
-                check("logbook 资质来源正确",
-                      quals[q_log_id].source == "logbook")
+                check("logbook 资质来源正确", quals[q_log_id].source == "logbook")
                 check("★ 手工授予的资质**没有**被抹掉",
                       q_manual_id in quals and quals[q_manual_id].revoked_at is None,
                       "手工资质被撤销了")
+                check("变更摘要含军衔", "军衔" in summary["changed"], str(summary))
 
-                check("确认后不再出现在待确认列表",
-                      rec1.id not in [r.id for r in LB.pending_for_member(db, mem_mid)])
-
-            print("\n[5] 确认：声明里被移除的 logbook 资质会被撤销")
+            print("\n[3] 声明值校验")
             with TestSession() as db:
-                rec = LB.get(db, rec1.id)
+                rec = LB.get(db, rec1_id)
+                for bad, label, kw in (
+                        ({"rank_id": "not-a-real-rank"}, "非法军衔被拒", "军衔"),
+                        ({"hours_seconds": -1}, "负时长被拒", "负数"),
+                        ({"sortie_count": -5}, "负架次被拒", "负数"),
+                        ({"qualification_ids": ["bogus-id"]}, "非法资质被拒", "资质")):
+                    try:
+                        LB.declare(db, rec, apply_now=False, **bad)
+                        check(label, False, "竟然通过了")
+                    except LB.LogbookError as exc:
+                        check(label, kw in str(exc), str(exc))
+                    db.rollback()
+                rec = LB.get(db, rec1_id)
+                check("0 小时是合法值（与「未填」不同）",
+                      LB.declare(db, rec, hours_seconds=0, apply_now=False) is not None
+                      and rec.declared_hours_seconds == 0)
+                db.rollback()
+
+            print("\n[4] 取消勾选的 logbook 资质会被撤销；手工资质依然完好")
+            with TestSession() as db:
+                rec = LB.get(db, rec1_id)
                 LB.declare(db, rec, rank_id=rank_high.id,
                            hours_seconds=3600 * 123, sortie_count=456,
-                           qualification_ids=[])       # 取消勾选
-                db.commit()
-                rec = LB.get(db, rec1.id)
-                LB.confirm_logbook(db, rec, actor_user_id=cmd_uid)
+                           qualification_ids=[],          # 取消勾选
+                           actor_user_id=mem_uid)
                 db.commit()
                 quals = {q.qualification_id: q for q in db.scalars(
                     select(MemberQualification)
@@ -324,32 +277,24 @@ def main() -> int:
                 check("★ 手工资质依然完好",
                       quals[q_manual_id].revoked_at is None)
 
-            print("\n[6] 无变化时如实报告")
+            print("\n[5] 重复登记同样内容 → 如实报告无变化")
             with TestSession() as db:
-                rec = LB.get(db, rec1.id)
-                s = LB.confirm_logbook(db, rec, actor_user_id=cmd_uid)
+                rec = LB.get(db, rec1_id)
+                before = (db.get(Member, mem_mid).rank_id,
+                          db.get(Member, mem_mid).logbook_hours_seconds,
+                          db.get(Member, mem_mid).logbook_sorties)
+                s = LB.declare(db, rec, rank_id=rank_high.id,
+                               hours_seconds=3600 * 123, sortie_count=456,
+                               qualification_ids=[], actor_user_id=mem_uid)
                 db.commit()
-                check("重复确认报告 no_change", s["no_change"], str(s["changed"]))
+                after = (db.get(Member, mem_mid).rank_id,
+                         db.get(Member, mem_mid).logbook_hours_seconds,
+                         db.get(Member, mem_mid).logbook_sorties)
+                check("重复登记报告 no_change", s["no_change"], str(s["changed"]))
+                check("重复登记后名册值不变", before == after)
 
             # ---------------- HTTP 层 ----------------
-            #
-            # ⚠️ 顺序很重要：第 4~6 组已经把 rec1 确认掉了，此时**没有待确认项**，
-            #    页面上不会出现"待确认/无权限/确认按钮"那一段。
-            #    所以先造一份**待确认**的归档，再验页面与权限。
-            print("\n[7] 准备一份待确认归档（供下面的页面与权限检查使用）")
-            with TestSession() as db:
-                pending_src = write_lbk(tdp, "Rookie.lbk", bytes(range(128)) + b"\x07" * 244)
-                rec_pending, _ = LB.store_upload(db, mem_mid, "Rookie.lbk",
-                                                 pending_src, uploaded_by=mem_uid)
-                LB.declare(db, rec_pending, rank_id=rank_low.id,
-                           hours_seconds=3600 * 9, sortie_count=3,
-                           qualification_ids=[q_log_id])
-                db.commit()
-                pending_id = rec_pending.id
-                check("已造出一份待确认归档",
-                      rec_pending.id in [r.id for r in LB.pending_for_member(db, mem_mid)])
-
-            print("\n[8] 页面与权限（HTTP）")
+            print("\n[6] 页面与权限（HTTP）")
             with TestClient(app) as client:
                 r = client.get("/account/logbook", follow_redirects=False)
                 check("匿名访问 → 跳登录", r.status_code == 303, "得到 %d" % r.status_code)
@@ -360,36 +305,38 @@ def main() -> int:
                 check("成员可打开自己的 Logbook 页", r.status_code == 200,
                       "得到 %d" % r.status_code)
                 check("页面说明不会自动解析", "不会自动读取" in r.text)
-                check("页面说明需要确认才写入名册", "确认" in r.text)
+                check("★ 页面说明不需要审核", "不需要审核" in r.text)
+                check("★ 页面说明保存即生效", "保存即生效" in r.text)
+                check("页面没有「待确认」字样", "待确认" not in r.text)
+                check("页面没有「确认写入名册」按钮", "确认写入名册" not in r.text)
                 check("成员能看到上传表单", 'name="file"' in r.text)
-                check("★ 成员看不到确认按钮（无 member.rank.edit）",
-                      "确认写入名册" not in r.text)
-                check("页面显示待确认但标注无权限",
-                      "无此权限" in r.text or "需要「军衔/资质编辑」权限" in r.text)
+
+                # 三个时长必须分别标注
+                check("页面区分「Logbook 累计时长」", "Logbook 累计时长" in r.text)
+                check("页面区分「日志时长」", "日志时长" in r.text)
+                check("页面区分「记录时长」", "记录时长" in r.text)
 
                 r = client.get("/members/%s/logbook" % owner_mid,
                                follow_redirects=False)
                 check("★ 成员不能看别人的 Logbook 页（403）", r.status_code == 403,
                       "得到 %d" % r.status_code)
 
-                # rec_owner_id 属于 Oblivion，Rookie 不是本人 → 必须 403
+                # rec_owner 属于 Oblivion，Rookie 不是本人 → 必须 403
                 r = client.get("/logbook/%s/download" % rec_owner_id,
                                follow_redirects=False)
                 check("★ 成员不能下载别人的原件（403）", r.status_code == 403,
                       "得到 %d" % r.status_code)
-                r = client.get("/logbook/%s/download" % rec_pending.id)
+                r = client.get("/logbook/%s/download" % rec1_id)
                 check("成员能下载自己的原件", r.status_code == 200,
                       "得到 %d" % r.status_code)
+                check("下载内容与上传一致", r.content == FAKE_LBK)
 
             with TestClient(app) as client:
                 check("指挥登录", login(client, "viper"))
                 r = client.get("/members/%s/logbook" % mem_mid)
                 check("指挥能打开成员 Logbook 页", r.status_code == 200,
                       "得到 %d" % r.status_code)
-                check("★ 指挥能看到确认按钮", "确认写入名册" in r.text)
-                check("指挥能看到待确认的声明值", "待确认的声明" in r.text)
-
-                r = client.get("/logbook/%s/download" % rec_pending.id)
+                r = client.get("/logbook/%s/download" % rec1_id)
                 check("指挥能下载成员的原件", r.status_code == 200,
                       "得到 %d" % r.status_code)
 
@@ -398,42 +345,8 @@ def main() -> int:
                 r = client.get("/members/%s/logbook" % mem_mid)
                 check("★ 教官可代他人管理（有 logbook.upload.any）",
                       r.status_code == 200, "得到 %d" % r.status_code)
-                check("★ 教官看不到确认按钮（无 member.rank.edit）",
-                      "确认写入名册" not in r.text)
 
-            print("\n[9] ★ 指挥通过 HTTP 确认 → 审计必须留改前/改后值")
-            with TestSession() as db:
-                before_rank = db.get(Member, mem_mid).rank_id
-
-            with TestClient(app) as client:
-                login(client, "viper")
-                page = client.get("/members/%s/logbook" % mem_mid)
-                tok = csrf_of(page.text)
-                r = client.post("/logbook/%s/confirm" % pending_id,
-                                data={"csrf_token": tok},
-                                follow_redirects=False)
-                check("指挥确认 → 303", r.status_code == 303,
-                      "得到 %d" % r.status_code)
-                check("回跳带 did=confirmed",
-                      "did=confirmed" in r.headers.get("location", ""))
-
-            with TestSession() as db:
-                m = db.get(Member, mem_mid)
-                check("★ 确认后名册军衔变为声明值", m.rank_id == rank_low.id)
-                check("确认后累计架次变为声明值", m.logbook_sorties == 3)
-                entry = db.scalar(select(AuditLog).where(
-                    AuditLog.action == "logbook.confirm"))
-                check("审计含 logbook.confirm", entry is not None)
-                check("确认审计记录了改前值",
-                      entry is not None and before_rank is not None
-                      and str(before_rank) in (entry.before_json or ""),
-                      "before_json=%s" % (entry.before_json if entry else None))
-                check("确认审计记录了改后值",
-                      entry is not None and str(rank_low.id) in (entry.after_json or ""))
-                check("确认审计记录了确认人",
-                      entry is not None and entry.actor_user_id == cmd_uid)
-
-            print("\n[10] CSRF 与权限边界（构造请求）")
+            print("\n[7] CSRF 与权限边界（构造请求）")
             with TestClient(app) as client:
                 login(client, "rookie")
                 r = client.post("/account/logbook/upload",
@@ -441,19 +354,9 @@ def main() -> int:
                                 data={"csrf_token": ""})
                 check("无 CSRF 上传被拒（403）", r.status_code == 403,
                       "得到 %d" % r.status_code)
-                r = client.post("/logbook/%s/confirm" % pending_id,
-                                data={"csrf_token": ""})
-                check("★ 无 CSRF 确认被拒（403）", r.status_code == 403,
-                      "得到 %d" % r.status_code)
-
-            with TestClient(app) as client:
-                login(client, "rookie")
-                page = client.get("/account/logbook")
-                tok = csrf_of(page.text)
-                r = client.post("/logbook/%s/confirm" % pending_id,
-                                data={"csrf_token": tok},
-                                follow_redirects=False)
-                check("★ 成员带 CSRF 确认也被拒（403）", r.status_code == 403,
+                r = client.post("/logbook/%s/declare" % rec1_id,
+                                data={"csrf_token": "", "hours": "1"})
+                check("★ 无 CSRF 登记被拒（403）", r.status_code == 403,
                       "得到 %d" % r.status_code)
 
             with TestClient(app) as client:
@@ -467,12 +370,19 @@ def main() -> int:
                 check("★ 成员不能代他人上传（403）", r.status_code == 403,
                       "得到 %d" % r.status_code)
 
-            print("\n[11] 上传 → 声明 走完整 HTTP 流程")
+                # 成员也不能对**别人的**归档写数值
+                r = client.post("/logbook/%s/declare" % rec_owner_id,
+                                data={"csrf_token": tok, "hours": "999"},
+                                follow_redirects=False)
+                check("★ 成员不能改别人归档的数值（403）", r.status_code == 403,
+                      "得到 %d" % r.status_code)
+
+            print("\n[8] 上传 → 填数值 走完整 HTTP 流程（保存即入库）")
             with TestClient(app) as client:
                 login(client, "rookie")
                 page = client.get("/account/logbook")
                 tok = csrf_of(page.text)
-                payload = bytes(range(200)) + b"\x00" * 172      # 另一份不同内容
+                payload = bytes(range(200)) + b"\x00" * 172
                 r = client.post("/account/logbook/upload",
                                 files={"file": ("Rookie.lbk", payload)},
                                 data={"csrf_token": tok, "note": "自检用"},
@@ -490,19 +400,24 @@ def main() -> int:
                         .where(LogbookFile.member_id == mem_mid)
                         .order_by(LogbookFile.created_at.desc()))
                     new_id = new_rec.id
-                    # 用"声明前后的快照"来验不变量，不要硬编码某个数字 ——
-                    # 前面的确认步骤已经合法地改过名册值。
+                roster_before = None
+                with TestSession() as db:
                     _m = db.get(Member, mem_mid)
                     roster_before = (_m.rank_id, _m.logbook_hours_seconds,
                                      _m.logbook_sorties)
 
                 r = client.post("/logbook/%s/declare" % new_id,
                                 data={"csrf_token": tok, "hours": "42.5",
-                                      "sorties": "7",
+                                      "sorties": "7", "rank_id": rank_low.id,
                                       "qualification_ids": [q_log_id]},
                                 follow_redirects=False)
-                check("保存声明值 → 303", r.status_code == 303,
+                check("保存数值 → 303", r.status_code == 303,
                       "得到 %d" % r.status_code)
+                check("回跳带 did=applied",
+                      "did=applied" in r.headers.get("location", ""))
+                check("不再是 did=declared（没有中间态）",
+                      "did=declared" not in r.headers.get("location", ""))
+
                 with TestSession() as db:
                     rec = db.get(LogbookFile, new_id)
                     check("小时换算为秒正确（42.5h）",
@@ -510,12 +425,11 @@ def main() -> int:
                           "得到 %s" % rec.declared_hours_seconds)
                     check("架次已存", rec.declared_sorties == 7)
                     m = db.get(Member, mem_mid)
-                    roster_after = (m.rank_id, m.logbook_hours_seconds,
-                                    m.logbook_sorties)
-                    check("★ 声明前后名册记录完全不变（声明 ≠ 确认）",
-                          roster_before == roster_after,
-                          "%s -> %s" % (roster_before, roster_after))
-                    check("★ 该归档仍是待确认状态", not rec.is_confirmed)
+                    check("★ 保存后名册**立即**变化", m.logbook_sorties == 7)
+                    check("★ 军衔也立即变化", m.rank_id == rank_low.id)
+                    check("该归档标为已写入名册", rec.is_confirmed)
+                    check("确实与保存前不同", roster_before != (
+                        m.rank_id, m.logbook_hours_seconds, m.logbook_sorties))
 
                 r = client.post("/logbook/%s/declare" % new_id,
                                 data={"csrf_token": tok, "hours": "abc"},
@@ -523,14 +437,13 @@ def main() -> int:
                 check("非数字小时被拒并回显错误",
                       "error=" in r.headers.get("location", ""))
 
-            print("\n[12] 删除后可以重新上传同一个文件")
+            print("\n[9] 删除后可以重新上传同一个文件")
             with TestClient(app) as client:
                 login(client, "rookie")
                 page = client.get("/account/logbook")
                 tok = csrf_of(page.text)
                 with TestSession() as db:
-                    target = LB.get(db, new_id)
-                    stored = LB.absolute_path(target)
+                    stored = LB.absolute_path(LB.get(db, new_id))
                 r = client.post("/logbook/%s/delete" % new_id,
                                 data={"csrf_token": tok},
                                 follow_redirects=False)
@@ -548,11 +461,8 @@ def main() -> int:
                                 follow_redirects=False)
                 check("★ 同一文件删除后可重新上传（唯一约束没挡住）",
                       r.status_code == 303, "得到 %d" % r.status_code)
-                with TestSession() as db:
-                    check("重新上传确实新建了记录",
-                          len([f for f in LB.list_for_member(db, mem_mid)]) >= 2)
 
-            print("\n[13] 未绑定名册的账号")
+            print("\n[10] 未绑定名册的账号")
             with TestSession() as db:
                 db.add(User(username="opsadmin",
                             password_hash=hash_password(PW), status="active",
@@ -565,27 +475,37 @@ def main() -> int:
                       "得到 %d" % r.status_code)
                 check("说明页解释这是正常状态", "没有绑定名册成员" in r.text)
 
-            print("\n[14] 审计留痕")
+            print("\n[11] 审计留痕")
             with TestSession() as db:
-                actions = [a for a in db.scalars(select(AuditLog.action)).all()]
-                for act in ("logbook.upload", "logbook.declare",
-                            "logbook.confirm", "logbook.delete"):
+                actions = list(db.scalars(select(AuditLog.action)).all())
+                for act in ("logbook.upload", "logbook.apply", "logbook.delete"):
                     check("审计含 %s" % act, act in actions)
-                conf = db.scalar(select(AuditLog).where(
-                    AuditLog.action == "logbook.confirm"))
-                check("确认审计记录了改前值",
-                      conf is not None and bool(conf.before_json))
-                check("确认审计记录了改后值",
-                      conf is not None and bool(conf.after_json))
+                ap = db.scalar(select(AuditLog).where(
+                    AuditLog.action == "logbook.apply"))
+                check("登记审计记录了改前值",
+                      ap is not None and bool(ap.before_json))
+                check("登记审计记录了改后值",
+                      ap is not None and bool(ap.after_json))
+                check("登记审计记录了操作者",
+                      ap is not None and ap.actor_user_id is not None)
+                check("★ 没有 logbook.confirm 动作（审核已取消）",
+                      "logbook.confirm" not in actions)
 
-            print("\n[15] 页面文案不得退化为「能自动解析」的承诺")
+            print("\n[12] 时长口径：三个量必须分别标注，不得混用")
+            with TestSession() as db:
+                from gfvfw.services.stats import (
+                    mission_flight_seconds, mission_recording_seconds,
+                )
+                check("可调用 mission_flight_seconds（日志时长）",
+                      callable(mission_flight_seconds))
+                check("可调用 mission_recording_seconds（记录时长）",
+                      callable(mission_recording_seconds))
             with TestClient(app) as client:
                 login(client, "rookie")
                 r = client.get("/account/logbook")
-                for bad in ("自动导入", "自动读取军衔"):
-                    check("不出现误导性承诺 %r" % bad, bad not in r.text)
-                check("明确说明口径不同（Logbook vs ACMI）",
-                      "口径不同" in r.text or "口径不同，不要互相校验" in r.text)
+                check("Logbook 页三个时长同框出现",
+                      all(k in r.text for k in ("Logbook 累计时长", "日志时长", "记录时长")))
+                check("明确提示不要互相校验", "不要互相校验" in r.text)
         finally:
             import gfvfw.config as _c
             import gfvfw.db as _d

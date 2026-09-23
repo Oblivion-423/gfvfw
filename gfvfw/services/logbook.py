@@ -158,10 +158,20 @@ def declare(db: Session, rec: LogbookFile, *,
             rank_id: Optional[str] = None,
             hours_seconds: Optional[int] = None,
             sortie_count: Optional[int] = None,
-            qualification_ids: Optional[list[str]] = None) -> None:
-    """记录成员从 LogbookEditor 界面读出的值（**不动名册**）。
+            qualification_ids: Optional[list[str]] = None,
+            apply_now: bool = True,
+            actor_user_id: Optional[str] = None,
+            actor_role: Optional[str] = None) -> dict[str, Any]:
+    """记录成员从 LogbookEditor 界面读出的值。
+
+    **按联队要求：Logbook 数据直接归档，不需要审核。**
+    因此 ``apply_now=True``（默认）时会**立刻写入名册**，
+    不再有"声明 → 待确认 → 指挥确认"的中间态。
 
     ``None`` 表示"这一项没填"，与"填了 0"不同 —— 0 小时是合法值。
+
+    返回变更摘要（供审计与页面提示）；``apply_now=False`` 时只存声明值，
+    返回空摘要（保留这条路径便于将来需要审核时启用）。
     """
     if rank_id:
         if db.get(Rank, rank_id) is None:
@@ -185,21 +195,32 @@ def declare(db: Session, rec: LogbookFile, *,
     rec.declared_sorties = sortie_count
     rec.declared_qualification_ids_json = json.dumps(ids) if ids else None
 
+    if not apply_now:
+        return {"changed": [], "no_change": True}
+
+    summary = apply_to_roster(db, rec, actor_user_id=actor_user_id,
+                              actor_role=actor_role)
+    return summary
+
 
 # --------------------------------------------------------------------------
-# 确认（写入名册 —— 敏感操作）
+# 写入名册
 # --------------------------------------------------------------------------
 
-def confirm_logbook(db: Session, rec: LogbookFile, *,
+def apply_to_roster(db: Session, rec: LogbookFile, *,
                     actor_user_id: Optional[str],
                     actor_role: Optional[str] = None) -> dict[str, Any]:
     """把声明值写入名册记录。返回变更摘要（用于审计与页面提示）。
 
-    ⚠️ **调用方必须先做权限校验**（``MEMBER_EDIT_RANK``）——
-    本函数只负责数据一致性，不做鉴权。
+    **按联队要求，Logbook 数据直接归档、无需审核** —— 所以本函数在
+    保存声明值时就被调用（见 :func:`declare`），不再有独立的"确认"步骤。
+
+    ⚠️ **调用方负责权限与审计**。当前实现由 ``logbook.upload``
+    （成员可改自己的）把关；写入的值一律标 ``source='logbook'`` 并记录
+    操作者与时间，所以事后完全可追溯、可回退。
 
     资质处理口径：**只同步 ``source='logbook'`` 的资质**。
-    手动授予的资质不会被撤销 —— 否则一次 Logbook 确认就会抹掉教官的考核记录。
+    手动授予的资质不会被撤销 —— 否则一次 Logbook 登记就会抹掉教官的考核记录。
     """
     member = db.get(Member, rec.member_id)
     if member is None:
@@ -248,7 +269,7 @@ def confirm_logbook(db: Session, rec: LogbookFile, *,
                     member_id=member.id, qualification_id=qid,
                     source="logbook", granted_by=actor_user_id,
                     updated_by=actor_user_id,
-                    note="由 Logbook 确认写入"))
+                    note="由 Logbook 登记"))
                 changed.append("新增资质")
             elif row.revoked_at is not None:
                 row.revoked_at = None
@@ -266,6 +287,9 @@ def confirm_logbook(db: Session, rec: LogbookFile, *,
                 row.updated_by = actor_user_id
                 changed.append("撤销资质")
 
+    #: ⚠️ 列名是 ``confirmed_*``，但**语义已随"不需要审核"改为"已写入名册的时刻/操作者"**。
+    #: 保留列名是为了不破坏已有数据（``schema_sync`` 只能加列不能改名）。
+    #: 见 :func:`apply_to_roster`。
     rec.confirmed_at = utcnow()
     rec.confirmed_by = actor_user_id
 
@@ -315,22 +339,15 @@ def current_for_member(db: Session, member_id: str) -> Optional[LogbookFile]:
         .limit(1))
 
 
-def pending_for_member(db: Session, member_id: str) -> list[LogbookFile]:
-    """已填声明值但尚未确认的归档 —— 待指挥/管理员核对。"""
-    rows = list(db.scalars(
+def applied_for_member(db: Session, member_id: str) -> Optional[LogbookFile]:
+    """最新一份**已写入名册**的归档。"""
+    return db.scalar(
         select(LogbookFile)
         .where(LogbookFile.member_id == member_id,
-               LogbookFile.confirmed_at.is_(None))
-        .order_by(LogbookFile.created_at.desc())).all())
-    return [r for r in rows if r.has_declaration()]
+               LogbookFile.confirmed_at.is_not(None))
+        .order_by(LogbookFile.created_at.desc())
+        .limit(1))
 
-
-def pending_count(db: Session) -> int:
-    """全站待确认数量（用于导航/看板提示）。"""
-    rows = db.scalars(
-        select(LogbookFile)
-        .where(LogbookFile.confirmed_at.is_(None))).all()
-    return sum(1 for r in rows if r.has_declaration())
 
 
 def get(db: Session, logbook_id: str) -> Optional[LogbookFile]:

@@ -25,7 +25,7 @@
   {% if stats.sortie_count %}
     <div class="stat-row">
       <div class="stat"><span class="v">{{ stats.sortie_count }}</span><span class="k">架次</span></div>
-      <div class="stat"><span class="v">{{ stats.flight_seconds|dur }}</span><span class="k">总时长</span></div>
+      <div class="stat"><span class="v">{{ stats.flight_seconds|dur }}</span><span class="k">日志时长</span></div>
       <div class="stat"><span class="v">{{ stats.distance_meters|distance }}</span><span class="k">总航程</span></div>
       <div class="stat"><span class="v">{{ stats.takeoffs }}</span><span class="k">起飞</span></div>
       <div class="stat"><span class="v">{{ stats.landings }}</span><span class="k">降落</span></div>
@@ -84,7 +84,7 @@
     <dt>Logbook 归档</dt><dd>
       {% if logbook_count %}
         {{ logbook_count }} 份
-        {% if logbook_pending %}<span class="badge warn">{{ logbook_pending }} 待确认</span>{% endif %}
+        {% if logbook_applied %}<span class="badge ok">已写入名册</span>{% endif %}
         {% if can_manage_logbook %}
           <a href="/members/{{ member.id }}/logbook">管理</a>
         {% endif %}

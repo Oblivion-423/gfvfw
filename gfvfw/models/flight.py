@@ -70,9 +70,21 @@ class Mission(IdMixin, TimestampMixin, SoftDeleteMixin, Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     mission_number: Mapped[Optional[str]] = mapped_column(String(32))
 
+    #: **记录时间窗**：从开始录制到停止录制（= 各文件录制窗的并集）。
+    #: ``ended_at − started_at`` 就是页面上那个**「记录时长」**。
+    #:
+    #: ⚠️ 它**不是**"飞了多久" —— 录制窗含起飞前与降落后的时间。
+    #: 实际飞行时间见 :attr:`duration_seconds`。
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    #: 冗余汇总，须提供"重算"入口，否则架次变更后会失真
+    #: **日志时长（秒）** = 各架次**在空区间**的并集，多人同飞只算一次。
+    #:
+    #: ⚠️ 与 ``ended_at − started_at``（记录时长）是**两个不同的量**，
+    #: 且必然 ≤ 它。页面上两者必须分别标注（实测 1小时7分 vs 1小时13分）。
+    #:
+    #: 冗余汇总，须提供"重算"入口，否则架次变更后会失真 ——
+    #: 因此展示时优先用 :func:`gfvfw.services.stats.mission_flight_seconds`
+    #: 读取时现算，本列只作兜底与排序用。
     duration_seconds: Mapped[Optional[int]] = mapped_column(BigInteger)
 
     mission_type: Mapped[str] = mapped_column(

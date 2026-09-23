@@ -62,10 +62,20 @@ def union_seconds(intervals) -> int:
 
 
 def mission_flight_seconds(db: Session, mission_ids) -> dict:
-    """``{mission_id: 任务时长秒数}``，**同一任务只算一次**。
+    """``{mission_id: 任务**日志时长**秒数}``，**同一任务只算一次**。
 
     优先取各架次「在空区间」的并集；没有可用区间时退回任务窗口
     （``ended_at − started_at``），再退回该任务最长的单个架次。
+
+    ⚠️ **这是"日志时长"，不是"记录时长"**，两者必须分别标注：
+
+    | 量 | 来源 | 实测同一任务 |
+    |---|---|---|
+    | **日志时长**（本函数） | 各架次**在空区间**的并集 | 4032 s = **1 小时 7 分** |
+    | **记录时长** | ACMI **录制时间窗**宽度（起飞前 + 在空 + 降落后） | 4418 s = **1 小时 13 分** |
+
+    录制窗必然 ≥ 在空并集（差值就是起飞前与降落后的时间）。
+    当初把两者混为一谈，导致页面上的"任务时长"其实是录制窗宽度。
 
     ⚠️ 刻意在**读取时**算，而不是只依赖 ``missions.duration_seconds`` 这个
     冗余列 —— 后者只在归并时（``recompute_mission``）刷新，架次被编辑或删除
@@ -107,6 +117,30 @@ def mission_flight_seconds(db: Session, mission_ids) -> dict:
         if not secs:
             secs = longest.get(mid, 0)
         out[mid] = secs
+    return out
+
+
+def mission_recording_seconds(db: Session, mission_ids) -> dict:
+    """``{mission_id: 任务**记录时长**秒数}`` —— ACMI 录制时间窗的宽度。
+
+    ⚠️ 与 :func:`mission_flight_seconds`（日志时长）是**两个不同的量**：
+
+    * **记录时长** = 从开始录制到停止录制。含起飞前的地面时间与降落后的滑行，
+      因此**必然 ≥** 该任务的日志时长。
+    * **日志时长** = 各架次在空区间的并集。
+
+    对多份文件归并出的任务，任务窗口（``started_at``/``ended_at``）本身就是
+    各文件录制窗的并集，所以直接取窗口宽度即可。
+    """
+    ids = [i for i in dict.fromkeys(mission_ids) if i]
+    if not ids:
+        return {}
+    out: dict[str, int] = {}
+    for m in db.scalars(select(Mission).where(Mission.id.in_(ids))):
+        if m.started_at and m.ended_at and m.ended_at > m.started_at:
+            out[m.id] = int(round((m.ended_at - m.started_at).total_seconds()))
+        else:
+            out[m.id] = int(m.duration_seconds or 0)
     return out
 
 

@@ -21,9 +21,8 @@
 {% if changed %}<div class="flash ok">已保存。</div>{% endif %}
 
 {% if did == 'uploaded' %}<div class="flash ok">Logbook 已归档。</div>{% endif %}
-{% if did == 'declared' %}<div class="flash ok">声明值已记录 —— 尚未写入名册，等待核对确认。</div>{% endif %}
-{% if did == 'confirmed' %}<div class="flash ok">已确认，名册记录已更新。</div>{% endif %}
-{% if did == 'nothing' %}<div class="flash info">确认完成，但名册记录没有变化（声明值与此前一致）。</div>{% endif %}
+{% if did == 'applied' %}<div class="flash ok">已保存，名册记录已按 Logbook 更新。</div>{% endif %}
+{% if did == 'nothing' %}<div class="flash info">已保存，但名册记录没有变化（填的值与此前一致）。</div>{% endif %}
 {% if did == 'deleted' %}<div class="flash ok">归档已删除，原件也已从服务器清理，可以重新上传。</div>{% endif %}
 {% if did == 'nofile' %}<div class="flash warn">没有选择文件。</div>{% endif %}
 
@@ -107,9 +106,33 @@
     </tbody>
   </table>
   <p class="small muted" style="margin:10px 0 0">
-    ⚠️ <strong>「Logbook 累计时长」与飞行记录的统计口径不同，不要互相校验：</strong>
-    前者是 Logbook 里的<strong>跨存档历史总量</strong>（含本站上线前的飞行），
-    后者只统计本站已归档的 ACMI 架次。两者对不上是正常的。
+    ⚠️ <strong>三个"时长"含义都不同，不要互相校验：</strong>
+  </p>
+  <table class="small" style="margin-top:6px">
+    <thead>
+      <tr><th style="width:150px">名称</th><th>含义</th><th style="width:120px">本页/本站</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Logbook 累计时长</strong></td>
+        <td>BMS Logbook 里的 <strong>跨存档历史总量</strong>，含本站上线前的飞行</td>
+        <td>{{ member.logbook_hours_seconds | dur if member.logbook_hours_seconds is not none else '未登记' }}</td>
+      </tr>
+      <tr>
+        <td><strong>日志时长</strong></td>
+        <td>本站飞行日志记的<b>在空时间</b>（各架次在空区间的并集，多人同飞只算一次）</td>
+        <td><a href="/log/campaign">飞行记录</a></td>
+      </tr>
+      <tr>
+        <td><strong>记录时长</strong></td>
+        <td>ACMI <b>录制时间窗</b>的宽度，含起飞前与降落后，必然 ≥ 日志时长</td>
+        <td><a href="/log/campaign">任务详情</a></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:8px 0 0">
+    三者量级可能相差很大（例如 Logbook 是几年累计，本站日志只统计已归档的架次），
+    <strong>对不上是正常的</strong>。
   </p>
 </div>
 
@@ -149,7 +172,8 @@
   <h2 style="margin-top:0">把 Logbook 里的数值填进来</h2>
   <p class="small muted" style="margin-top:-4px">
     用 <code>LogbookEditor.exe</code> 打开你的 <code>.lbk</code>，照着界面把下面几项填进来。
-    <strong>填完不会立刻改名册</strong> —— 需要指挥 / 管理员核对确认后才写入。
+    <strong>保存即生效</strong> —— 按联队要求，Logbook 数据直接归档到名册，<strong>不需要审核</strong>。
+    写入的值会标记来源为「Logbook」，并记录填写人与时间，随时可追溯。
   </p>
   <form method="post" action="/logbook/{{ current.id }}/declare">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -201,60 +225,16 @@
         </tr>
       </tbody>
     </table>
-    <p><button class="btn" type="submit">保存声明值</button></p>
+    <p><button class="btn" type="submit">保存并写入名册</button></p>
   </form>
-</div>
-{% endif %}
-
-{# ------------------------------------------------------------------ #}
-{# 待确认 #}
-{# ------------------------------------------------------------------ #}
-{% if pending %}
-<div class="panel">
-  <h2 style="margin-top:0">待确认的声明（{{ pending | length }}）</h2>
-  {% if not can_confirm %}
-  <p class="small muted" style="margin-top:-4px">
-    写入名册属于敏感变更，需要「军衔/资质编辑」权限（联队指挥 / 超级管理员）。
-    当前账号无此权限，可以查看但不能确认。
-  </p>
-  {% endif %}
-  <table>
-    <thead>
-      <tr><th>归档时间</th><th>文件</th><th>声明的军衔</th>
-          <th>累计时长</th><th>累计架次</th><th>资质</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for f in pending %}
-      <tr>
-        <td class="small">{{ f.created_at | datetime }}</td>
-        <td class="small">{{ f.original_filename }}</td>
-        <td>{{ f.declared_rank.name if f.declared_rank else '—' }}</td>
-        <td>{{ f.declared_hours_seconds | dur if f.declared_hours_seconds is not none else '—' }}</td>
-        <td>{{ f.declared_sorties if f.declared_sorties is not none else '—' }}</td>
-        <td class="small">
-          {% set dq = f.declared_qualification_ids() %}
-          {% if dq %}{{ dq | length }} 项{% else %}—{% endif %}
-        </td>
-        <td>
-          {% if can_confirm %}
-          <form method="post" action="/logbook/{{ f.id }}/confirm" style="display:inline">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="btn" type="submit">确认写入名册</button>
-          </form>
-          {% else %}
-          <span class="muted small">无权限</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
 </div>
 {% endif %}
 
 {# ------------------------------------------------------------------ #}
 {# 已归档列表 #}
 {# ------------------------------------------------------------------ #}
+{# ⚠️ 这里**没有"待确认/审核"区块** —— 按联队要求，Logbook 数据保存即写入名册。
+    归档列表里的「已写入名册 / 仅归档」徽标只表示"这份归档的值是否已应用过"。 #}
 <div class="panel">
   <h2 style="margin-top:0">已归档的 Logbook（{{ files | length }}）</h2>
   {% if not files %}
@@ -277,15 +257,21 @@
         <td class="small"><code>{{ f.sha256[:16] }}…</code></td>
         <td>
           {% if f.confirmed_at %}
-            <span class="badge ok">已确认</span>
+            <span class="badge ok">已写入名册</span>
           {% elif f.has_declaration() %}
-            <span class="badge warn">待确认</span>
+            <span class="badge warn">有数值未应用</span>
           {% else %}
             <span class="badge">仅归档</span>
           {% endif %}
         </td>
         <td class="small">
           <a href="/logbook/{{ f.id }}/download">下载</a>
+          {% if f.has_declaration() %}
+          <form method="post" action="/logbook/{{ f.id }}/reapply" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn ghost" type="submit">重新应用</button>
+          </form>
+          {% endif %}
           {% if can_upload %}
           <form method="post" action="/logbook/{{ f.id }}/delete" style="display:inline"
                 onsubmit="return confirm('删除这份归档？原件会一并从服务器清理。');">

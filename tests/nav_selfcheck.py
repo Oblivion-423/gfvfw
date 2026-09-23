@@ -184,7 +184,7 @@ def main() -> int:
                 check("战役记录含战役内训练", "战役内训练-01" in r.text)
                 check("战役记录不含战役外训练", "日常训练-01" not in r.text)
                 # 任务维度的时长一律"只算一次"，标签也随之明确
-                check("战役记录显示汇总（任务总时长）", "任务总时长" in r.text)
+                check("战役记录显示汇总（日志总时长）", "日志总时长" in r.text)
                 check("战役记录注明按任务计", "多人飞同一任务只算一次" in r.text)
                 check("战役记录用海里", "NM" in r.text)
 

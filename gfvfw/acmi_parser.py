@@ -144,6 +144,16 @@ class SortieRecord:
     first_seen_relative_s: Optional[float] = None
     last_seen_relative_s: Optional[float] = None
 
+    #: **在空区间**（相对秒）。这是"日志时长"的依据 ——
+    #: 从第一次有在空证据（速度）到最后一次有在空证据。
+    #:
+    #: ⚠️ 与"记录时长"（``AcmiFileInfo.duration_seconds``，即录制时间窗宽度）
+    #: 是**两个不同的量**：录制窗含起飞前与降落后的时间，因此必然 ≥ 在空区间。
+    #: 实测同一任务：记录时长 4418 s（1 小时 13 分），各人在空约 3970 s（1 小时 6 分）。
+    #: 页面必须分别标注，不能互相校验。
+    airborne_start_relative_s: Optional[float] = None
+    airborne_end_relative_s: Optional[float] = None
+
     # -- 起降（用户口径） --
     takeoff_count: int = 1                 # 按定义出现即 1 次
     landing_count: int = 0
@@ -397,7 +407,8 @@ class _ObjState:
         "max_cas", "max_alt",
         "prev_lon", "prev_lat", "prev_u", "prev_v",
         "first_seen", "last_seen", "last_ts",
-        "flight", "takeoffs", "landings", "distance_geo", "distance_uv",
+        "flight", "airborne_start", "airborne_end",
+        "takeoffs", "landings", "distance_geo", "distance_uv",
         "speed_samples",
         "shots", "destroyed", "crashed", "ejected", "exceed", "maxg", "maxmach",
         "counted",
@@ -416,6 +427,9 @@ class _ObjState:
         self.last_seen: Optional[float] = None
         self.last_ts = 0.0
         self.flight = 0.0
+        #: 在空区间（相对秒）—— 日志时长的依据，见 SortieRecord 的说明
+        self.airborne_start: Optional[float] = None
+        self.airborne_end: Optional[float] = None
         self.takeoffs = 0
         self.landings = 0
         self.distance_geo = 0.0
@@ -738,6 +752,18 @@ class AcmiParser:
         # 用户口径下"起飞"由出现即定，但时长仍需时间区间，故按速度证据累计。
         if delta_t > 0 and self._looks_airborne(st):
             st.flight += delta_t
+            # 在空区间的起止。
+            #
+            # ⚠️ 起点取**上一个采样时刻**（``st.last_ts``）而不是当前时刻：
+            #    上面把 ``delta_t``（上一个采样 → 当前采样）整段计入了飞行时长，
+            #    因为飞机是在这段区间内的某一刻离地的。若起点取当前时刻，
+            #    区间宽度会**小于**累计出来的飞行时长 ——
+            #    进而出现"多人同飞任务的日志时长比其中单人的还短"这种自相矛盾。
+            #    （自校验里正是这条断言抓住了该错误：合成样例
+            #     flight_seconds=1500 而区间只有 1200。）
+            if st.airborne_start is None:
+                st.airborne_start = st.last_ts
+            st.airborne_end = cur_ts
 
     @staticmethod
     def _looks_airborne(st: _ObjState) -> bool:
@@ -772,6 +798,8 @@ class AcmiParser:
             object_id=st.oid,
             first_seen_relative_s=st.first_seen,
             last_seen_relative_s=st.last_seen,
+            airborne_start_relative_s=st.airborne_start,
+            airborne_end_relative_s=st.airborne_end,
             takeoff_count=1,                 # 用户口径：出现即计 1 次
             landing_count=landing,
             end_cas_kts=st.cas,
