@@ -376,8 +376,25 @@ sudo -u gfvfw -H bash -c '
 
 ```bash
 sudo cp /srv/gfvfw/deploy/env.example /etc/gfvfw/env
-sudo chmod 600 /etc/gfvfw/env
+# ⚠️ 属主 root、组 gfvfw、权限 640（不是 600）——原因见下方警告
+sudo chown root:gfvfw /etc/gfvfw/env
+sudo chmod 640 /etc/gfvfw/env
 ```
+
+> ⚠️ **为什么是 640 而不是 600**
+>
+> systemd 在**降权之前以 root 身份**读 `EnvironmentFile=`，所以服务本身
+> 600 也能跑。但**你手工跑 CLI 时是以 `gfvfw` 用户 source 这个文件的**：
+> ```bash
+> sudo -u gfvfw -H bash -c 'set -a; . /etc/gfvfw/env; set +a; ...'
+> ```
+> 600 root:root 时这一步会报 **`bash: /etc/gfvfw/env: Permission denied`**，
+> 配置**根本没读进去**，路径悄悄回退到 `config.py` 的默认值。
+>
+> 这套默认值（由 `BASE_DIR` 推出的**绝对路径**）恰好也是 `/srv/gfvfw/var/`，
+> 所以**看起来一切正常** —— 实测就是这样，`create-admin` 照样成功。
+> 但只要有人日后在 env 里改了 `GFVFW_DATABASE_URL`，没读到配置的 CLI 就会
+> **静默创建/操作另一个库**。640 让服务账号能读，这类事故就不可能发生。
 
 ⚠️ **`env.example` 里只有 `GFVFW_SECRET_KEY` 一行需要改** ——
 其余默认值（`GFVFW_HTTPS_ONLY=true`、`GFVFW_BMS_INSTALL_PATH`、三个数据路径）
@@ -400,7 +417,10 @@ sudo sed -i "s|^GFVFW_SECRET_KEY=.*|GFVFW_SECRET_KEY=${KEY}|" /etc/gfvfw/env
 awk -F= '/^GFVFW_SECRET_KEY=/{if ($2 ~ /CHANGE-ME/) print "✗ 还是占位值"; \
          else print "✓ 密钥已设置，长度 " length($2)}' /etc/gfvfw/env
 grep -E '^(GFVFW_HTTPS_ONLY|GFVFW_BMS_INSTALL_PATH|GFVFW_DATABASE_URL)=' /etc/gfvfw/env
-ls -l /etc/gfvfw/env      # 期望 -rw------- root root
+ls -l /etc/gfvfw/env      # 期望 -rw-r----- root gfvfw
+
+# 验证 gfvfw 用户确实读得到了（不再报 Permission denied）
+sudo -u gfvfw -H bash -c 'set -a; . /etc/gfvfw/env; set +a; echo "读到数据库: $GFVFW_DATABASE_URL"'
 ```
 
 | 变量 | 值 | 不改的后果 |

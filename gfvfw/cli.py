@@ -23,10 +23,12 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
+import os
 import sys
 
 from sqlalchemy import select
 
+from .config import settings
 from .db import SessionLocal, engine
 from .models import Member, MemberRole, Role, User
 from .permissions import ROLE_DEFINITIONS
@@ -39,6 +41,23 @@ log = logging.getLogger("gfvfw.cli")
 
 def _setup() -> None:
     logging.basicConfig(level="INFO", format="%(levelname)-7s %(message)s")
+
+    # ⚠️ 把"我到底在操作哪个库"打出来。
+    #
+    # 起因（实测）：`/etc/gfvfw/env` 是 600 root:root，所以以 gfvfw 用户跑
+    # ``set -a; . /etc/gfvfw/env`` 会报 ``Permission denied`` —— **配置根本没读进去**，
+    # 路径悄悄回退到 config.py 的默认值。而这套默认值（由 BASE_DIR 推出的绝对路径）
+    # 恰好也是 /srv/gfvfw/var/，于是"看起来一切正常"。
+    # 一旦有人在 env 里改了 GFVFW_DATABASE_URL 而 CLI 又没读到，
+    # 就会**静默创建/操作另一个库** —— 那种事故极难排查。
+    #
+    # 所以每次 CLI 运行都明确打印来源，让人一眼看出配置有没有生效。
+    from_env = bool(os.environ.get("GFVFW_DATABASE_URL"))
+    print("数据库 ：%s" % settings.database_url)
+    print("配置来源：%s" % ("环境变量 / /etc/gfvfw/env" if from_env
+                          else "⚠️ 默认值 —— 没有读到 /etc/gfvfw/env！"))
+    print()
+
     ensure_schema(engine)
 
 
