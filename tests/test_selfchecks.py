@@ -97,12 +97,12 @@ def test_account_suite():
 
 
 def test_logbook_suite():
-    """BMS Logbook 上传与名册同步。
+    """BMS Logbook 上传、自动解析与名册同步。
 
-    ``.lbk`` 是私有二进制格式（实测四个样本确认为定长 + 非固定密钥混淆，
-    无法可靠解析，见 requirements §8.1），所以这里是**归档原件 + 手填数值 +
-    指挥确认**：声明值不直接影响名册，确认才写入，且资质只同步
-    ``source='logbook'`` 的那一批。
+    ``.lbk`` 格式**已经解出**（372 字节定长 + 差分异或，密钥
+    ``"Falcon is your Master"``，见 ``gfvfw/lbk_parser.py``），
+    所以这里是**上传即自动写入名册，没有手填表单、也没有审核环节**；
+    解析失败时原件仍然归档、页面如实标注「解析失败」。
     """
     _assert_no_failures(_load("logbook_selfcheck.py"), "logbook")
 

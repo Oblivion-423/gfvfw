@@ -2,13 +2,16 @@
 
 页面形态
 --------
-* ``/account/logbook`` —— **成员自助**：上传自己的 ``.lbk``、填写从 LogbookEditor
-  读出的数值、查看已归档文件与名册里已登记的值。
+* ``/account/logbook`` —— **成员自助**：上传自己的 ``.lbk``，查看解析结果与归档。
 * ``/members/{id}/logbook`` —— **代他人**（教官/指挥）：同一套操作，针对指定成员。
 
-⚠️ **没有"审核/确认"环节** —— 联队要求 Logbook 数据直接归档，
-所以 POST ``/logbook/{id}/declare`` 保存时**立即写入名册**
-（``/logbook/{id}/reapply`` 只是把某份历史归档的值再应用一次）。
+**上传即自动解析，无需手动输入。** ``.lbk`` 格式已经解出（见
+:mod:`gfvfw.lbk_parser`），所以上传后系统直接把文件里的
+军衔 / 累计飞行时长 / 累计架次 / 勋章写入名册；页面上没有任何手填表单。
+
+⚠️ **也没有"审核/确认"环节** —— 联队要求 Logbook 数据直接归档。
+``POST /logbook/{id}/reparse`` 用**已归档的原件**重跑解析并同步名册
+（解析器改进后回填历史存档，不必让成员重传）。
 
 为什么没有独立的一级菜单
 ------------------------
@@ -32,12 +35,11 @@ from sqlalchemy.orm import Session
 from ...models import (
     Member, MemberQualification, Qualification, Rank, USER_STATUS_LABELS,
 )
-from ...permissions import LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY, MEMBER_EDIT_RANK
+from ...permissions import LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY
 from ...security import verify_csrf
 from ...services import logbook as LB
 from ...services.audit import record_audit
-from ..deps import Principal, get_db, get_principal, require, require_login
-from ..forms import FieldError, parse_float, parse_int
+from ..deps import Principal, get_db, require, require_login
 from ..templating import render
 
 log = logging.getLogger("gfvfw.web.logbook")
@@ -71,6 +73,10 @@ def _page_context(db: Session, principal: Principal, member: Member,
                   message: str = "", is_self: bool) -> dict:
     files = LB.list_for_member(db, member.id)
     held = _held_qualification_ids(db, member.id)
+    # ⚠️ 解析结果取自**最新一份解析成功的**归档，而不是"最新一份归档"。
+    #    否则成员先传一份好文件、再误传一个坏文件时，页面会被失败信息占满，
+    #    名册里明明有值却看不到来源 —— 而 current 的好坏另用失败面板提示。
+    parsed_from = next((f for f in files if f.parsed_json), None)
     ctx = {
         "member": member,
         "is_self": is_self,
@@ -85,11 +91,69 @@ def _page_context(db: Session, principal: Principal, member: Member,
         "status_labels": USER_STATUS_LABELS,
         "max_kb": LB.MAX_LOGBOOK_BYTES // 1024,
         "error": error, "warning": warning, "message": message,
-        # 表单预填用**最新一份归档**的值
-        "declared": files[0] if files else None,
+        "awards": LB.list_awards(db, member.id),
+        # 解析结果的展示视图 + 它来自哪一份归档
+        "parsed": _parsed_view(parsed_from),
+        "parsed_source": parsed_from,
     }
-    ctx.update(_options(db))
     return ctx
+
+
+def _flash_from_query(request: Request) -> dict:
+    """把重定向带回来的 ``did`` / ``error`` / ``warning`` 变成页面提示。
+
+    ⚠️ 这三个参数**必须在 GET 里读出来**，否则上传的失败原因与
+    "已自动填入名册：…" 的解析摘要在 303 之后就被丢掉了 ——
+    用户只会看到一个没有反馈的页面。
+    """
+    q = request.query_params
+    return {
+        "did": q.get("did", ""),
+        "error": q.get("error", ""),
+        "warning": q.get("warning", ""),
+        "message": q.get("message", ""),
+    }
+
+
+def _parsed_view(rec) -> dict | None:
+    """把 ``parsed_json`` 整理成模板好用的结构。
+
+    分三块呈现，**已确证与推断分开**，避免把猜出来的偏移当成事实展示：
+    ``certain`` / ``medals`` / ``others``。
+    """
+    import json as _json
+
+    from ... import lbk_parser as LBP
+
+    if not rec or not rec.parsed_json:
+        return None
+    try:
+        data = _json.loads(rec.parsed_json)
+    except ValueError:
+        return None
+    fields = data.get("fields") or {}
+    certain_names = set(data.get("certain") or [])
+
+    certain = [{"name": s.name, "offset": s.offset, "note": s.note,
+                "value": fields.get(s.name)}
+               for s in LBP.FIELDS if s.certain]
+    medals = [{"offset": off, "code": code, "label": label,
+               "value": fields.get("medal_%s" % code)}
+              for off, code, label in LB.MEDAL_FIELDS]
+    others = [{"name": k, "value": v} for k, v in sorted(fields.items())
+              if k not in certain_names
+              and not k.startswith("medal_")
+              and not k.startswith("name")
+              and not k.startswith("callsign")
+              and not k.startswith("squadron")
+              and not k.startswith("date")
+              and not k.startswith("text_")]
+    return {"certain": certain, "medals": medals, "others": others,
+            "warnings": data.get("warnings") or [],
+            "rank_code": fields.get("rank_index") is not None
+            and LBP.RANKS[fields["rank_index"]]
+            if isinstance(fields.get("rank_index"), int)
+            and 0 <= fields["rank_index"] < len(LBP.RANKS) else None}
 
 
 # --------------------------------------------------------------------------
@@ -106,7 +170,7 @@ def own_logbook(request: Request,
         # 账号没绑名册（例如纯管理员账号）—— 明确说明，而不是空白页
         return render(request, "logbook/no_member.html", {}, status_code=200)
     ctx = _page_context(db, principal, member, is_self=True)
-    ctx["did"] = request.query_params.get("did", "")
+    ctx.update(_flash_from_query(request))
     return render(request, "logbook/page.html", ctx)
 
 
@@ -119,7 +183,7 @@ def member_logbook(member_id: str, request: Request,
     if member is None or member.deleted_at is not None:
         raise HTTPException(status_code=404, detail="成员不存在")
     ctx = _page_context(db, principal, member, is_self=False)
-    ctx["did"] = request.query_params.get("did", "")
+    ctx.update(_flash_from_query(request))
     return render(request, "logbook/page.html", ctx)
 
 
@@ -176,14 +240,15 @@ async def _do_upload(request: Request, principal: Principal, db: Session,
                     break
                 tmp.write(chunk)
 
-        rec, warnings = LB.store_upload(
+        rec, warnings, status = LB.store_upload(
             db, member.id, file.filename, Path(tmp_path),
             uploaded_by=principal.user.id, note=note)
         record_audit(db, principal.user.id, "logbook.upload", "logbook_files",
                      rec.id,
                      after={"member_id": member.id,
                             "filename": rec.original_filename,
-                            "sha256": rec.sha256, "size": rec.size_bytes},
+                            "sha256": rec.sha256, "size": rec.size_bytes,
+                            "parse_status": status},
                      reason="上传 BMS Logbook 归档",
                      actor_role=principal.primary_role, request=request)
         db.commit()
@@ -200,94 +265,33 @@ async def _do_upload(request: Request, principal: Principal, db: Session,
         if tmp_path:
             Path(tmp_path).unlink(missing_ok=True)
 
-    did = "uploaded"
+    # ⚠️ did 必须区分"解析成功"与"仅归档、解析失败" —— 否则页面会谎报
+    #    「已自动解析写入名册」，而名册其实没动。
+    did = {"stored": "uploaded",
+           "stored_unparsed": "uploaded_unparsed",
+           "duplicate": "duplicate"}.get(status, "uploaded")
+    # ⚠️ 把所有提示都带上（可能同时有"呼号不符"和"已自动填入…"两条）——
+    #    只带 warnings[0] 会把"到底填了什么"丢掉。
     if warnings:
-        return RedirectResponse("%s?did=%s&warning=%s" % (page, did, _q(warnings[0])),
+        return RedirectResponse("%s?did=%s&warning=%s"
+                               % (page, did, _q("；".join(warnings), 500)),
                                status_code=303)
     return RedirectResponse("%s?did=%s" % (page, did), status_code=303)
 
 
 # --------------------------------------------------------------------------
-# 声明值
+# 重新解析
 # --------------------------------------------------------------------------
 
-@router.post("/logbook/{logbook_id}/declare")
-def declare_values(logbook_id: str, request: Request,
-                   rank_id: str = Form(""),
-                   hours: str = Form(""),
-                   sorties: str = Form(""),
-                   qualification_ids: list[str] = Form(default=[]),
-                   csrf_token: str = Form(""),
-                   principal: Principal = Depends(require_login),
-                   db: Session = Depends(get_db)):
-
-    verify_csrf(request, csrf_token)
-    rec = LB.get(db, logbook_id)
-    if rec is None:
-        raise HTTPException(status_code=404, detail="归档记录不存在")
-
-    is_self = principal.member is not None and rec.member_id == principal.member.id
-    if not (is_self and principal.can(LOGBOOK_UPLOAD)) \
-            and not principal.can(LOGBOOK_UPLOAD_ANY):
-        raise HTTPException(status_code=403, detail="没有权限修改这份归档")
-
-    page = ("/account/logbook" if is_self
-            else "/members/%s/logbook" % rec.member_id)
-
-    # 小时是**展示单位**，入库转秒 —— 换算集中在 web/forms.py，不在路由里手写
-    try:
-        hours_value = parse_float(hours, "累计飞行时长（小时）", minimum=0.0)
-        hours_seconds = (int(round(hours_value * 3600))
-                         if hours_value is not None else None)
-    except FieldError as exc:
-        return RedirectResponse(page + "?error=" + _q(str(exc)), status_code=303)
-
-    try:
-        sortie_count = parse_int(sorties, "累计架次", minimum=0)
-    except FieldError as exc:
-        return RedirectResponse(page + "?error=" + _q(str(exc)), status_code=303)
-
-    try:
-        summary = LB.declare(db, rec, rank_id=rank_id.strip() or None,
-                             hours_seconds=hours_seconds,
-                             sortie_count=sortie_count,
-                             qualification_ids=qualification_ids,
-                             apply_now=True,
-                             actor_user_id=principal.user.id,
-                             actor_role=principal.primary_role)
-        # 按联队要求：Logbook 数据**直接归档，不需要审核** ——
-        # 所以这一步就已经写入名册，审计记的是"改前/改后"而不是"待确认"。
-        record_audit(db, principal.user.id, "logbook.apply", "members",
-                     rec.member_id,
-                     before=summary.get("before"), after=summary.get("after"),
-                     reason="按 Logbook 登记名册记录：%s"
-                            % ("、".join(summary.get("changed") or []) or "无变化"),
-                     actor_role=principal.primary_role, request=request)
-        db.commit()
-    except LB.LogbookError as exc:
-        db.rollback()
-        return RedirectResponse(page + "?error=" + _q(str(exc)), status_code=303)
-
-    if summary.get("no_change"):
-        return RedirectResponse(page + "?did=nothing", status_code=303)
-    return RedirectResponse(page + "?did=applied", status_code=303)
-
-
-# --------------------------------------------------------------------------
-# 重新写入名册（把历史归档的值再应用一次）
-# --------------------------------------------------------------------------
-#
-# ⚠️ 这里**没有独立的"审核/确认"步骤** —— 联队要求 Logbook 数据直接归档。
-#    保存在 :func:`declare_values` 里就已经写入名册了。
-#    本路由只是"把某份历史归档的值重新应用一次"（例如名册被别处改过、
-#    或换回了旧档），同样直接生效。
-
-@router.post("/logbook/{logbook_id}/reapply")
-def reapply(logbook_id: str, request: Request,
+@router.post("/logbook/{logbook_id}/reparse")
+def reparse(logbook_id: str, request: Request,
             csrf_token: str = Form(""),
             principal: Principal = Depends(require_login),
             db: Session = Depends(get_db)):
+    """用**已归档的原件**重新解析一次并同步名册。
 
+    用途：解析器改进后回填历史存档 —— 不必让成员重新上传。
+    """
     verify_csrf(request, csrf_token)
     rec = LB.get(db, logbook_id)
     if rec is None:
@@ -299,22 +303,26 @@ def reapply(logbook_id: str, request: Request,
         raise HTTPException(status_code=403, detail="没有权限操作这份归档")
 
     page = "/account/logbook" if is_self else "/members/%s/logbook" % rec.member_id
-
     try:
-        summary = LB.apply_to_roster(db, rec, actor_user_id=principal.user.id,
-                                     actor_role=principal.primary_role)
-        record_audit(db, principal.user.id, "logbook.apply", "members",
-                     summary["member_id"],
-                     before=summary["before"], after=summary["after"],
-                     reason="重新应用 Logbook 归档的值：%s"
-                            % ("、".join(summary["changed"]) or "无变化"),
+        summary = LB.reparse(db, rec, actor_user_id=principal.user.id)
+        record_audit(db, principal.user.id, "logbook.reparse", "members",
+                     rec.member_id,
+                     before=summary.get("before"), after=summary.get("after"),
+                     reason="重新解析已归档的 Logbook：%s"
+                            % ("、".join(summary.get("changed") or []) or "无变化"),
                      actor_role=principal.primary_role, request=request)
         db.commit()
     except LB.LogbookError as exc:
+        # 回滚掉半截解析（不能污染名册），但**失败这件事要留在归档上** ——
+        # 否则列表会一直显示旧的「已写入名册」徽标，与事实不符。
         db.rollback()
+        stale = LB.get(db, logbook_id)
+        if stale is not None:
+            LB.record_parse_failure(db, stale, str(exc))
+            db.commit()
         return RedirectResponse(page + "?error=" + _q(str(exc)), status_code=303)
 
-    if summary["no_change"]:
+    if summary.get("no_change"):
         return RedirectResponse(page + "?did=nothing", status_code=303)
     return RedirectResponse(page + "?did=applied", status_code=303)
 
@@ -376,6 +384,6 @@ def delete(logbook_id: str, request: Request,
 # 小工具
 # --------------------------------------------------------------------------
 
-def _q(text: str) -> str:
+def _q(text: str, maxlen: int = 200) -> str:
     from urllib.parse import quote
-    return quote(text[:200], safe="")
+    return quote(text[:maxlen], safe="")

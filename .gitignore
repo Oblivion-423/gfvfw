@@ -43,3 +43,9 @@ desktop.ini
 # 参考源码（CamReader / SITREP 的解压产物，第三方代码，不入库）
 reference/
 *.zip
+
+# ---- 逆向工程临时产物 ----
+# LogbookEditor.exe 的反汇编/字符串转储（1.5 MB+）。**可随时重建**，
+# 命令见 gfvfw/lbk_parser.py 的模块注释与 README「BMS Logbook 上传」一节：
+#   G:\mingw64\bin\objdump.exe -d -M intel LogbookEditor.exe > _re/lbk/disasm.txt
+_re/

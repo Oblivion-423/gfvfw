@@ -288,6 +288,16 @@ class LogbookFile(IdMixin, TimestampMixin, Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     uploaded_by: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id"), nullable=False)
+    # ---- 解析结果（上传时自动解析，联队要求"不需要手动输入"）----
+    #: 解析出的全部字段（JSON）。**保留全部字段**而不是只留我们认识的几个 ——
+    #: 将来把某个偏移的含义确认下来时，历史存档无需重新上传即可回填。
+    parsed_json: Mapped[Optional[str]] = mapped_column(Text)
+    parsed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    #: 解析失败原因（格式变了/不是 Logbook）。失败不影响归档本身。
+    parse_error: Mapped[Optional[str]] = mapped_column(Text)
+    #: 解析使用的格式说明版本，便于日后判断要不要重解析
+    parser_version: Mapped[Optional[str]] = mapped_column(String(32))
+
     #: 上传者填写的一句话说明（例如"换电脑后重开档"）
     note: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -337,6 +347,39 @@ class LogbookFile(IdMixin, TimestampMixin, Base):
                     or self.declared_hours_seconds is not None
                     or self.declared_sorties is not None
                     or self.declared_qualification_ids())
+
+
+class MemberAward(IdMixin, TimestampMixin, Base):
+    """成员获得的荣誉/勋章（需求 §4.6 的 ``Award``）。
+
+    数据来源主要是 BMS Logbook —— 官方 Logbook 有 6 个 ``edtMedal*`` 字段，
+    解析后同步到这里（``source='logbook'``）。
+
+    ⚠️ ``level`` 存的是**文件里的原始字节值**，不是"第几级"。
+    实测该值可随飞行增加（例如同一人在 7 个月内从 6 变 8），
+    所以它更像位域或计数，而不是布尔。
+    """
+
+    __tablename__ = "member_awards"
+
+    member_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("members.id"), nullable=False)
+    #: 稳定标识，如 ``silver_star``
+    code: Mapped[str] = mapped_column(String(48), nullable=False)
+    name: Mapped[str] = mapped_column(String(96), nullable=False)
+    #: 文件里的原始字节值（0 表示未获得）
+    level: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), default="logbook", nullable=False)
+    note: Mapped[Optional[str]] = mapped_column(Text)
+    updated_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
+
+    member: Mapped["Member"] = relationship()
+
+    __table_args__ = (
+        # 一个成员同一枚勋章只有一行（重复解析走更新而不是新增）
+        UniqueConstraint("member_id", "code", name="uq_member_awards_member_code"),
+        Index("ix_member_awards_member", "member_id"),
+    )
 
 
 class Role(IdMixin, Base):

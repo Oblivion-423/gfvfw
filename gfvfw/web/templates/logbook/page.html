@@ -18,31 +18,41 @@
   </div>
 </div>
 
-{% if changed %}<div class="flash ok">已保存。</div>{% endif %}
-
-{% if did == 'uploaded' %}<div class="flash ok">Logbook 已归档。</div>{% endif %}
-{% if did == 'applied' %}<div class="flash ok">已保存，名册记录已按 Logbook 更新。</div>{% endif %}
-{% if did == 'nothing' %}<div class="flash info">已保存，但名册记录没有变化（填的值与此前一致）。</div>{% endif %}
+{% if error %}<div class="flash warn"><strong>操作未完成：</strong>{{ error }}</div>{% endif %}
+{% if did == 'uploaded' %}<div class="flash ok">Logbook 已归档，并<strong>已自动解析写入名册</strong>。</div>{% endif %}
+{% if did == 'uploaded_unparsed' %}<div class="flash warn">原件<strong>已归档</strong>，但<strong>没能解析</strong> —— 名册这次没有变动。请见下方「解析失败」说明，原件可以下载核对。</div>{% endif %}
+{% if did == 'duplicate' %}<div class="flash info">这份文件此前已经归档过了，没有重复保存。</div>{% endif %}
+{% if did == 'applied' %}<div class="flash ok">已重新解析，名册记录已按文件内容更新。</div>{% endif %}
+{% if did == 'nothing' %}<div class="flash info">已重新解析，但名册记录没有变化（文件内容与此前一致）。</div>{% endif %}
 {% if did == 'deleted' %}<div class="flash ok">归档已删除，原件也已从服务器清理，可以重新上传。</div>{% endif %}
 {% if did == 'nofile' %}<div class="flash warn">没有选择文件。</div>{% endif %}
+{# ⚠️ 解析摘要与"这份文件传过了"之类的提示都从 warning 进来 —— 必须显示，
+   否则用户看不到系统到底自动填了什么。 #}
+{% if warning %}<div class="flash info">{{ warning }}</div>{% endif %}
+{% if message %}<div class="flash info">{{ message }}</div>{% endif %}
 
 {# ------------------------------------------------------------------ #}
-{# 关于"为什么不自动解析"—— 这是本页最关键的一段说明，不要删 #}
+{# 格式说明 —— 已解出，上传即自动解析 #}
 {# ------------------------------------------------------------------ #}
 <div class="panel">
-  <h2 style="margin-top:0">先读这段：文件会被归档，但<strong>不会自动读取</strong></h2>
+  <h2 style="margin-top:0"><strong>上传即自动解析</strong>，无需手动输入</h2>
   <p class="small" style="margin-top:-4px">
-    BMS 的 <code>.lbk</code> 是私有二进制格式，我们实测了四个真实样本后确认
-    无法可靠解析：四个文件都是定长 372 字节、尾部有周期 42 的重复块，
-    <strong>不是简单的固定密钥异或</strong>；官方读取工具
-    <code>Tools\Logbook Editor\LogbookEditor.exe</code> 是 32 位 Qt4 程序，
-    且<strong>没有导入任何系统加密 API</strong>（混淆是内联自实现的）。
-    即便逆向出格式，BMS 版本升级也可能改动它并<strong>静默</strong>读出错数据。
+    BMS 的 <code>.lbk</code> 格式<strong>已经解出</strong>（用 <code>objdump</code>
+    反汇编官方读取器 <code>LogbookEditor.exe</code> 得到）：
+    文件固定 <strong>372 字节</strong>，内容是
+    <code>明文[i] = 密文[i] XOR 密钥[i % 21] XOR 密文[i-1]</code>
+    的差分异或（<code>密文[-1] = 0x58</code>，密钥是
+    <code>.data:0x418000</code> 处的 <code>"Falcon is your Master"</code>，
+    21 字节循环使用），末尾 4 字节必须是 0。
+    编码与解码是官方工具里两个不同的函数（<code>0x40300c</code> /
+    <code>0x40305c</code>），都以密文的前一字节作链值。
   </p>
   <p class="small muted" style="margin-bottom:0">
-    所以这里的做法是：<strong>归档原件 + 你手填数值 + 指挥确认</strong>。
-    原件会被完整保存（按 SHA256 去重），随时可下载回本地核对 ——
-    将来若真的支持解析，已归档的文件可以直接复用。
+    上传后系统会自动读取并填入：<strong>军衔、累计飞行小时、累计架次、勋章</strong>，
+    以及姓名 / 呼号 / 中队 / 日期。<strong>不需要审核</strong> ——
+    保存即写入名册，不必等任何人确认，也不必再手填一遍。
+    原件仍完整保存（按 SHA256 去重、可下载），
+    解析器将来有改进时可以用「重新解析」按钮在原件上重跑，不必重新上传。
   </p>
 </div>
 
@@ -159,74 +169,144 @@
       <input type="text" id="note" name="note" maxlength="200" style="width:340px">
       <br><span class="hint">例如「换电脑后重开档，累计清零」—— 便于日后看懂这份存档的来历。</span>
     </p>
-    <p><button class="btn" type="submit">上传并归档</button></p>
+    <p><button class="btn" type="submit">上传并自动解析</button></p>
   </form>
 </div>
 {% endif %}
 
 {# ------------------------------------------------------------------ #}
-{# 声明值 #}
+{# 解析结果 #}
 {# ------------------------------------------------------------------ #}
-{% if current and can_upload %}
+{% if parsed %}
 <div class="panel">
-  <h2 style="margin-top:0">把 Logbook 里的数值填进来</h2>
-  <p class="small muted" style="margin-top:-4px">
-    用 <code>LogbookEditor.exe</code> 打开你的 <code>.lbk</code>，照着界面把下面几项填进来。
-    <strong>保存即生效</strong> —— 按联队要求，Logbook 数据直接归档到名册，<strong>不需要审核</strong>。
-    写入的值会标记来源为「Logbook」，并记录填写人与时间，随时可追溯。
+  <h2 style="margin-top:0">从文件里读到的内容</h2>
+  {% if parsed_source %}
+  <p class="small muted" style="margin-top:-6px">
+    数据来自归档
+    <code>{{ parsed_source.original_filename }}</code>
+    （{{ parsed_source.created_at | datetime }}，解析器 v{{ parsed_source.parser_version }}）。
+    {% if current and current.id != parsed_source.id and current.parse_error %}
+      <br>⚠️ 更新的一份归档 <code>{{ current.original_filename }}</code>
+      <strong>解析失败</strong>，名册仍是上面这份的数据 —— 详见下方。
+    {% endif %}
   </p>
-  <form method="post" action="/logbook/{{ current.id }}/declare">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <table>
+  {% endif %}
+
+  {# ⚠️ 已确证字段与推断字段必须分开呈现。推断字段**不写入名册** ——
+     宁可少填，也不要把猜出来的偏移当成事实塞进名册。 #}
+  <table>
+    <thead><tr><th style="width:170px">字段</th><th>值</th><th style="width:150px">文件偏移</th></tr></thead>
+    <tbody>
+      {% for f in parsed.certain %}
+      <tr>
+        <td><strong>{{ f.name }}</strong></td>
+        <td>
+          {% if f.name == 'flight_hours' %}
+            {{ '%.2f 小时' % f.value }}
+          {% elif f.name == 'rank_index' %}
+            {{ parsed.rank_code or f.value }}
+            <span class="muted small">（下标 {{ f.value }}）</span>
+          {% elif f.value is float %}
+            {{ '%.4f' % f.value }}
+          {% else %}
+            {{ f.value }}
+          {% endif %}
+        </td>
+        <td class="mono small">0x{{ '%02x' % f.offset }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:8px 0 0">
+    上表中的 <code>flight_hours</code>、<code>rank_index</code>、姓名/呼号/中队/日期
+    是<strong>已确证</strong>的字段（有官方工具代码或时间序列佐证），会写入名册。
+  </p>
+
+  {# ---- 勋章 ---- #}
+  <h3>勋章（文件里的 6 个字节）</h3>
+  <table>
+    <thead><tr><th style="width:170px">勋章</th><th style="width:100px">原始值</th>
+               <th style="width:150px">文件偏移</th><th></th></tr></thead>
+    <tbody>
+      {% for m in parsed.medals %}
+      <tr>
+        <td>{{ m.label }}</td>
+        <td>{{ m.value if m.value is not none else '—' }}</td>
+        <td class="mono small">0x{{ '%02x' % m.offset }}</td>
+        <td>
+          {% if m.value %}<span class="badge ok">已获得</span>
+          {% else %}<span class="muted small">无</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:8px 0 0">
+    ⚠️ 官方工具恰好有 6 个 <code>edtMedal*</code> 控件，文件里恰好有 6 个勋章字节，
+    数量吻合；<strong>但哪个字节对应哪枚勋章是按界面顺序推断的</strong>，
+    请在 <code>LogbookEditor</code> 里核对一次。原始值会随飞行增加
+    （实测同一人在 7 个月内从 6 变 8），所以它更像位域或计数，不是布尔。
+  </p>
+
+  {# ---- 其余数值 ---- #}
+  <details style="margin-top:14px">
+    <summary class="small" style="cursor:pointer">
+      文件中的其余数值（{{ parsed.others | length }} 项，<strong>含义未确认</strong>，未写入名册）
+    </summary>
+    <table style="margin-top:8px">
+      <thead><tr><th style="width:220px">字段（按偏移命名）</th><th>值</th></tr></thead>
       <tbody>
-        <tr>
-          <th style="width:180px"><label for="rank_id">军衔</label></th>
-          <td>
-            <select id="rank_id" name="rank_id">
-              <option value="">（不填 / 未变）</option>
-              {% for r in ranks %}
-                <option value="{{ r.id }}"
-                  {{ 'selected' if current.declared_rank_id == r.id else '' }}>
-                  {{ r.level }} · {{ r.name }}
-                </option>
-              {% endfor %}
-            </select>
-          </td>
-        </tr>
-        <tr>
-          <th><label for="hours">累计飞行时长（小时）</label></th>
-          <td>
-            <input type="text" id="hours" name="hours" style="width:120px"
-                   value="{{ '%.1f' % (current.declared_hours_seconds / 3600) if current.declared_hours_seconds is not none else '' }}">
-            <span class="hint">可带小数，例如 <code>123.5</code></span>
-          </td>
-        </tr>
-        <tr>
-          <th><label for="sorties">累计架次</label></th>
-          <td>
-            <input type="text" id="sorties" name="sorties" style="width:120px"
-                   value="{{ current.declared_sorties if current.declared_sorties is not none else '' }}">
-          </td>
-        </tr>
-        <tr>
-          <th>资质</th>
-          <td>
-            {% set dq = current.declared_qualification_ids() %}
-            {% for q in qualifications %}
-              <label style="display:inline-block;margin:0 14px 6px 0">
-                <input type="checkbox" name="qualification_ids" value="{{ q.id }}"
-                       {{ 'checked' if q.id in dq else '' }}>
-                {{ q.name }}
-              </label>
-            {% else %}
-              <span class="muted small">资质字典为空，请先在「成员」页维护资质定义。</span>
-            {% endfor %}
-          </td>
-        </tr>
+        {% for o in parsed.others %}
+        <tr><td class="mono small">{{ o.name }}</td><td>{{ o.value }}</td></tr>
+        {% endfor %}
       </tbody>
     </table>
-    <p><button class="btn" type="submit">保存并写入名册</button></p>
-  </form>
+    <p class="small muted" style="margin:8px 0 0">
+      这些是官方工具能编辑、但<strong>我们尚未确认业务含义</strong>的统计项
+      （战役与对抗两组：击杀、任务数、评分等）。
+      它们<strong>只展示、不写入名册</strong>，避免把猜的标签当成事实。
+      如果你在 LogbookEditor 里对照出哪一项是什么，告诉我即可补上映射 ——
+      已归档的文件用「重新解析」就能回填，无需重传。
+    </p>
+  </details>
+
+  {% if can_upload or can_manage_any %}
+  <p style="margin:14px 0 0">
+    <form method="post" action="/logbook/{{ current.id }}/reparse" style="display:inline"
+          onsubmit="return confirm('用服务器上的原件重新解析并同步名册？');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn ghost" type="submit">重新解析并同步名册</button>
+    </form>
+    <span class="hint" style="margin-left:8px">
+      解析器改进后用这个按钮回填，不必重新上传。
+    </span>
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+
+{# ⚠️ 失败面板与上面的解析面板**不是互斥的**：最新的归档可能解析失败，
+    而名册里还留着上一份成功解析的数据 —— 两种情况必须同时说清楚。 #}
+{% if current and current.parse_error %}
+<div class="panel">
+  <h2 style="margin-top:0">解析失败</h2>
+  <p class="small" style="margin:0 0 8px">
+    <code>{{ current.original_filename }}</code>（{{ current.created_at | datetime }}）
+    原件<strong>已归档</strong>，但自动解析没有成功：<br>
+    <code class="small">{{ current.parse_error }}</code>
+  </p>
+  <p class="small muted" style="margin:0">
+    这通常意味着文件不是 BMS Logbook，或 BMS 版本改动了格式。
+    原件仍在服务器上，随时可下载核对；解析器更新后可用「重新解析」重跑。
+  </p>
+  {% if can_upload or can_manage_any %}
+  <p style="margin:12px 0 0">
+    <form method="post" action="/logbook/{{ current.id }}/reparse" style="display:inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn ghost" type="submit">重新解析</button>
+    </form>
+  </p>
+  {% endif %}
 </div>
 {% endif %}
 
@@ -256,20 +336,20 @@
         <td class="small">{{ f.size_bytes | filesize }}</td>
         <td class="small"><code>{{ f.sha256[:16] }}…</code></td>
         <td>
-          {% if f.confirmed_at %}
+          {% if f.parse_error %}
+            <span class="badge warn">解析失败</span>
+          {% elif f.confirmed_at %}
             <span class="badge ok">已写入名册</span>
-          {% elif f.has_declaration() %}
-            <span class="badge warn">有数值未应用</span>
           {% else %}
             <span class="badge">仅归档</span>
           {% endif %}
         </td>
         <td class="small">
           <a href="/logbook/{{ f.id }}/download">下载</a>
-          {% if f.has_declaration() %}
-          <form method="post" action="/logbook/{{ f.id }}/reapply" style="display:inline">
+          {% if can_upload or can_manage_any %}
+          <form method="post" action="/logbook/{{ f.id }}/reparse" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="btn ghost" type="submit">重新应用</button>
+            <button class="btn ghost" type="submit">重新解析</button>
           </form>
           {% endif %}
           {% if can_upload %}

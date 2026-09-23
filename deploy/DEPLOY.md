@@ -521,6 +521,23 @@ sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.
 
 **升级后请看一眼日志**，确认补的列正是这次版本该补的 —— 这是当前唯一的"迁移记录"。
 
+**升级到 Logbook 自动解析（v1.9）时会自动发生两件事**：
+
+1. `create_all` 建出 **`member_awards`** 表（勋章）；
+2. `schema_sync` 给 `members` 补列：`logbook_hours_seconds` / `logbook_sorties` /
+   `logbook_updated_at` / `logbook_updated_by`；给 `logbook_files` 补列：
+   `parsed_json` / `parsed_at` / `parse_error` / `parser_version` / `note`。
+
+**但既有归档不会被自动重解析**（它们是自动解析上线前传的）。升级后跑一次回填：
+
+```bash
+cd /srv/gfvfw
+sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py            # 只读预览
+sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
+```
+
+它是**幂等**的（内容没变就报"无变化"），可以放心重复跑。
+
 这是**开发期权宜方案**：
 
 - 只**加列/加表**，不会改类型、不会删列、不会重建索引；
@@ -546,7 +563,10 @@ sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.
 | 删传错的 ACMI（未归并的） | ACMI 工作台 → 上传阶段 →「删除」 | `acmi.upload`（自己的） |
 | 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
 | 上传/更换 Logbook | 账号页 →「我的 Logbook」 | `logbook.upload`（自己的） |
-| 登记 Logbook 的数值（军衔/累计量） | 账号页 →「我的 Logbook」→ 保存 | `logbook.upload`（自己的）｜ `logbook.upload.any`（代他人） |
+| 代成员上传 Logbook | 成员档案 →「Logbook」 | `logbook.upload.any`（教官/指挥） |
+| 重新解析某份 Logbook 归档 | Logbook 页 → 归档列表「重新解析」 | 同上 |
+| 批量回填历史 Logbook 归档 | 服务器上 `python scripts/reparse_logbooks.py --apply` | 需要 shell |
+| 改军衔（不依赖 Logbook） | 成员档案 →「编辑」 | `member.rank.edit`（指挥/owner） |
 
 两个**有意设计**的约束：
 
@@ -555,6 +575,11 @@ sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.
    这同时也是「改归属/重做归并」的路径。
 2. **任务的「任务时长」不随编辑时间窗变化。** 它由各架次的在空区间算出
    （多人同飞只算一次）。时间窗是元数据，用于展示与筛选。编辑页上已明说。
+
+> **Logbook 没有手填入口**（有意如此）：`.lbk` 格式已解出，上传即自动解析并写入
+> 名册。若某个文件解析失败，页面会显示「解析失败」而**不会**让你手填 ——
+> 那时请下载原件核对，或等解析器更新后用「重新解析」回填。
+> 真正需要人工调整军衔时用上表的「改军衔」一行（走 `member.rank.edit`）。
 
 所有手动修改都会写进**审计日志**（谁、何时、改前改后、原因），
 架次被人工改过之后可信度会自动降为「估算」，页面上标「手动/估算」，

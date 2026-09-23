@@ -297,28 +297,37 @@ def main() -> int:
     check("★ 改密失败后当前会话仍可用（没被踢出/锁死）", status == 200,
           f"status={status}")
 
-    print("\n[11] Logbook 上传（归档 + 声明 ≠ 确认）")
+    print("\n[11] Logbook 上传（自动解析，无手填、无审核）")
     status, html = s.get("/account/logbook")
     check("GET /account/logbook 200", status == 200, f"status={status}")
-    check("页面说明文件不会自动读取", "不会自动读取" in html)
+    check("页面说明上传即自动解析", "上传即自动解析" in html)
+    check("页面说明不需要审核", "不需要审核" in html)
     check("页面说明三个时长不要互相校验", "不要互相校验" in html)
     check("页面含上传表单", 'enctype="multipart/form-data"' in html)
+    # 手动登记路径已随自动解析一起移除 —— 页面不该再出现这些输入框
+    check("★ 页面已无手填数值的输入框",
+          'name="hours"' not in html and 'name="sorties"' not in html)
     # ⚠️ 只读探针：**不上传任何文件**（上传会写库、写磁盘）。
     #    这里只验证页面契约与权限边界。
     status, html = s.get("/members/00000000-0000-0000-0000-000000000000/logbook")
     check("不存在的成员 Logbook 页 404", status == 404, f"status={status}")
     token = s.csrf("/account/logbook") or ""
-    # ⚠️ 按联队要求 Logbook **不需要审核**，所以没有 /confirm 路由；
-    #    数值随保存直接写入名册（/declare）。
-    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/declare",
-                       {"hours": "1"})
-    check("无 CSRF 的 Logbook 保存被拒（403）", status == 403, f"status={status}")
-    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/declare",
-                       {"csrf_token": token, "hours": "1"})
-    check("不存在的归档保存 404", status == 404, f"status={status}")
+    # ⚠️ Logbook **不需要审核**：没有 /confirm，也没有手填的 /declare；
+    #    唯一的人工触发入口是"用已归档原件重新解析"（/reparse）。
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/reparse", {})
+    check("无 CSRF 的重新解析被拒（403）", status == 403, f"status={status}")
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/reparse",
+                       {"csrf_token": token})
+    check("不存在的归档重新解析 404", status == 404, f"status={status}")
     status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/confirm",
                        {"csrf_token": token})
     check("★ 已无 /confirm 审核路由（404）", status == 404, f"status={status}")
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/declare",
+                       {"csrf_token": token, "hours": "1"})
+    check("★ 已无 /declare 手填路由（404）", status == 404, f"status={status}")
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/reapply",
+                       {"csrf_token": token})
+    check("★ 已无 /reapply 路由（404）", status == 404, f"status={status}")
     status, _ = s.get("/logbook/00000000-0000-0000-0000-000000000000/download")
     check("不存在的归档下载 404", status == 404, f"status={status}")
 
