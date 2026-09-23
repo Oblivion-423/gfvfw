@@ -276,6 +276,26 @@ def main() -> int:
                 check("首页空状态提示存在", "不导入历史文件" in r.text)
                 check("静态样式可访问", client.get("/static/app.css").status_code == 200)
 
+                # ★ 首页队标：不仅要在 HTML 里出现，**引用的文件还得真的在**。
+                #   只断言 class 名的话，把文件改名/删掉，测试照样绿 ——
+                #   而线上是个裂图，谁也不会在测试里发现。
+                check("首页含队标 <img>", 'class="wing-logo"' in r.text)
+                m = re.search(r'<img class="wing-logo"[^>]*src="([^"]+)"', r.text)
+                check("★ 队标 <img> 带 src", bool(m), "没找到 wing-logo 的 src")
+                if m:
+                    src = m.group(1)
+                    if src.startswith(("http://testserver", "http://")):
+                        src = src.split("testserver", 1)[-1] if "testserver" in src else src
+                    img = client.get(src)
+                    check("★ 队标文件真的存在且是 PNG（%s）" % src,
+                          img.status_code == 200
+                          and img.headers.get("content-type", "").startswith("image/png"),
+                          "status=%d type=%s" % (img.status_code,
+                                                 img.headers.get("content-type")))
+                # 队标只放首页，别处不要出现（免得变成到处都是的装饰）
+                check("★ 其他页面没有队标",
+                      'class="wing-logo"' not in client.get("/login").text)
+
                 r = client.get("/login")
                 check("登录页可访问", r.status_code == 200)
                 check("登录页含 CSRF 令牌", bool(csrf_of(r.text)))

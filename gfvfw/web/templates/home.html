@@ -2,10 +2,21 @@
 {% block title %}概览 · {{ SITE_NAME }}{% endblock %}
 
 {% block content %}
-<div class="page-head">
-  <div>
-    <h1>概览</h1>
-    <div class="sub">{{ SITE_NAME_EN }}</div>
+{# 队标：只在首页出现（顶栏仍用文字标识）。
+   ⚠️ 它是**透明底** PNG，所以这里刻意不给背景色/圆角/边框 ——
+      套个框会把队标的轮廓盖掉。为什么连"浅色底盘"也不加，
+      见 app.css 里 .wing-logo 的注释（有实测数字）。
+   ⚠️ width/height 写的是**文件真实尺寸**（供浏览器算宽高比、避免加载时跳版），
+      实际显示大小由 CSS 的 .wing-logo 控制。 #}
+<div class="page-head home-head">
+  <div class="wing-id">
+    <img class="wing-logo" src="{{ url_for('static', path='img/logo.png') }}"
+         width="204" height="240"
+         alt="矛隼虚拟飞行联队队标">
+    <div>
+      <h1>概览</h1>
+      <div class="sub">{{ SITE_NAME_EN }}</div>
+    </div>
   </div>
 </div>
 

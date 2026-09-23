@@ -109,6 +109,43 @@ h3 { font-size: 14px; margin: 18px 0 8px; color: var(--fg-muted); font-weight: 6
 }
 .page-head .sub { color: var(--fg-dim); font-size: 12px; }
 
+/* ---------- 首页队标 ---------- */
+/* 队标与标题的横向组合。标题跟队标垂直居中对齐，比 flex-end 自然。 */
+.home-head { align-items: center; }
+.wing-id { display: flex; align-items: center; gap: 16px; }
+.wing-logo {
+  display: block;
+  height: 96px; width: auto;
+  /* ⚠️ 队标是**透明底** PNG：**不要**加 background / border / border-radius ——
+     它本身是"翅膀 + 圆徽"的轮廓，套个矩形框会把轮廓盖掉。
+     这里只用 drop-shadow 做两层分离：近处一层深影把亮部托起来，
+     远处一层扩散影让它在深底上有体积感。
+     （必须用 drop-shadow 而不是 box-shadow —— 后者会画出一个矩形阴影框。）
+
+     ⚠️ 为什么**刻意不加"浅色圆形底盘"**（虽然那看着像个好主意）：
+     实测把队标合成到各候选底色上，统计"对比度 < 1.6 的不透明像素占比"：
+
+         不加底盘 #10141a（--bg）      17.8%   ← 现在这样
+         #2b3644（--border）           25.5%   ← 更差
+         #3a485a（--bg-elevated）      21.5%   ← 更差
+         #55606e                       18.7%   ← 持平
+         #8a97a6（--fg-muted）         57.6%   ← 灾难：队标主体就是这个色
+         #dfe6ee（--fg，接近白）        10.9%   ← 只有接近白才真的更好
+
+     队标主体是中灰（#98a8b0），所以**中灰底盘反而把它吃掉了**；
+     要真的改善只能垫接近白的底盘，那就是在深色页面上摆一块白牌 ——
+     那是明显改变观感的设计决定，留给联队自己定。
+     想试的话：给 .wing-logo 加
+       background: #dfe6ee; border-radius: 50%; padding: 6px;
+     一行即可，轮廓无损（徽记本身是圆形，垫圆盘不违和）。 */
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .55))
+          drop-shadow(0 0 18px rgba(140, 175, 210, .16));
+}
+@media (max-width: 560px) {
+  .wing-logo { height: 64px; }
+  .wing-id { gap: 12px; }
+}
+
 /* ---------- 卡片 / 面板 ---------- */
 .panel {
   background: var(--bg-panel);
