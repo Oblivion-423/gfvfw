@@ -196,58 +196,98 @@ python3 --version                # 需要 3.10+
 
 ## 2. 把代码传到服务器
 
-代码已在私有仓库：**`https://github.com/Oblivion-423/gfvfw`**
+代码在**私有**仓库：**`git@github.com:Oblivion-423/gfvfw.git`**
+
+> ⚠️ **私有仓库必须用 SSH 地址 clone，不能用 HTTPS。**
+> GitHub 从 2021 年起不接受账号密码做 HTTPS 认证，`git clone https://...`
+> 对私有库只会反复要用户名口令（无头服务器上根本没法输），
+> 报错形如 `Authentication failed` 或 `could not read Username for 'https://github.com'`。
+> 而 SSH 部署密钥可以从**第一次 clone** 就用上 —— 所以先配钥匙，再 clone。
+
+### 2.1 先配部署密钥（**顺序很重要：必须在 clone 之前**）
 
 ```bash
-sudo mkdir -p /srv/gfvfw && sudo chown gfvfw:gfvfw /srv/gfvfw
-sudo -u gfvfw git clone https://github.com/Oblivion-423/gfvfw /srv/gfvfw
-sudo chown -R gfvfw:gfvfw /srv/gfvfw
-ls /srv/gfvfw         # 应看到 gfvfw/ deploy/ tests/ requirements.txt README.md docs/
-```
+# 1) 用户与密钥目录（gfvfw 用户须已存在，见第 1 步）
+id gfvfw || useradd --system --create-home --shell /usr/sbin/nologin gfvfw
+install -d -m 700 -o gfvfw -g gfvfw /var/lib/gfvfw/.ssh
 
-### ⚠️ 私有仓库在无头服务器上怎么认证（**先做这一步，否则 clone 会卡在输密码**）
-
-GitHub 从 2021 年起**不接受账号密码**做 HTTPS 认证，`git clone` 会一直要用户名口令。
-两个办法，**推荐前者**：
-
-| 方案 | 怎么做 | 适用 |
-|---|---|---|
-| **只读部署密钥**（推荐） | 在服务器上生成一对 SSH key，把**公钥**加成仓库的 Deploy Key（只读） | 服务器只需 `git pull`，不需要推送权限 —— 只读正好 |
-| 个人访问令牌（PAT） | 生成 fine-grained PAT（只读 Contents），填进 `git clone https://<token>@github.com/...` | 图省事，但令牌会留在服务器的 remote 配置里 |
-
-部署密钥的完整步骤：
-
-```bash
-# 1) 服务器上：先给密钥一个**仓库目录之外**的家
-#    ⚠️ 不要把私钥放在 /srv/gfvfw 里面 —— 那在 git 工作区内，
-#       将来任何一次 git add -A 都可能把私钥提交进仓库。
-sudo install -d -m 700 -o gfvfw -g gfvfw /var/lib/gfvfw/.ssh
-
-# 2) 生成密钥（不给口令，否则 update.sh 会卡在交互）
+# 2) 生成密钥（不给口令，否则 update.sh 会卡在交互输入）
 sudo -u gfvfw ssh-keygen -t ed25519 -C "gfvfw-server" \
   -f /var/lib/gfvfw/.ssh/gfvfw_deploy -N ""
 
-# 3) 打印公钥，复制它
-sudo cat /var/lib/gfvfw/.ssh/gfvfw_deploy.pub
-
-# 4) 到 GitHub 仓库页面：Settings → Deploy keys → Add deploy key
-#    标题随意（如 gfvfw-vps），粘贴公钥，**不要**勾 "Allow write access"
-
-# 5) 告诉 git 用这把钥匙（只对这个仓库生效，不污染全局配置）
-sudo -u gfvfw -H bash -c 'cd /srv/gfvfw && \
-  git config core.sshCommand "ssh -i /var/lib/gfvfw/.ssh/gfvfw_deploy -o IdentitiesOnly=yes" && \
-  git remote set-url origin git@github.com:Oblivion-423/gfvfw.git'
-
-# 6) 先验证握手（首次会问 host key，答 yes）
-sudo -u gfvfw -H ssh -i /var/lib/gfvfw/.ssh/gfvfw_deploy -o IdentitiesOnly=yes \
-  -T git@github.com        # 期望：Hi Oblivion-423/gfvfw! You've successfully authenticated...
+# 3) 打印公钥 —— 复制**整行**（ssh-ed25519 开头）
+cat /var/lib/gfvfw/.ssh/gfvfw_deploy.pub
 ```
 
-⚠️ 用**只读**部署密钥正好合适：服务器只需要 `git pull`，
-`update.sh` 的回滚靠本地 `git reset --hard`，都不需要推送权限。
-这样即使服务器被攻破，也改不了 GitHub 上的代码。
+**4) 到 GitHub 加 Deploy Key**（**Deploy keys**，不是账号级 SSH keys）：
 
-**升级流程（§11）不用改**，`update.sh` 里的 `git pull --ff-only` 会自动用上这把钥匙。
+> 仓库页 → Settings → Deploy keys → `Add deploy key`
+> 或直达：`https://github.com/Oblivion-423/gfvfw/settings/keys`
+>
+> 标题填 `gfvfw-vps`；粘贴刚复制的**整行**；
+> ⚠️ **不要勾** `Allow write access`（服务器只需 `git pull`）。
+
+> ⚠️ **粘贴前先核对指纹**，比肉眼比对那串 Base64 可靠得多 ——
+> Base64 里的小写字母 `l` 和数字 `1` 在终端字体下几乎分不出：
+> ```bash
+> ssh-keygen -lf /var/lib/gfvfw/.ssh/gfvfw_deploy.pub
+> # 期望：256 SHA256:AbCd...xyz gfvfw-server (ED25519)
+> ```
+> 添加成功后 GitHub 会显示钥匙指纹，与上面这段 `SHA256:` **完全一致**才算贴对。
+> 若 GitHub 报 `Key is invalid`，就是粘贴时抄错了字符，重新复制一次。
+
+```bash
+# 5) 给 gfvfw 用户写 ~/.ssh/config —— 这才是 clone 也能用上钥匙的关键
+#    ⚠️ 用 core.sshCommand 不行：那条命令要在**已经是 git 仓库**的目录里才能设，
+#       而 clone 之前目录里还没有 .git，会报 "fatal: not in a git directory"。
+install -d -m 700 -o gfvfw -g gfvfw /home/gfvfw/.ssh
+cat > /home/gfvfw/.ssh/config <<'EOF'
+Host github.com
+  IdentityFile /var/lib/gfvfw/.ssh/gfvfw_deploy
+  IdentitiesOnly yes
+EOF
+chown gfvfw:gfvfw /home/gfvfw/.ssh/config
+chmod 600 /home/gfvfw/.ssh/config
+
+# 6) 验证握手（首次会问 host key，答 yes）
+sudo -u gfvfw -H ssh -T git@github.com
+# 期望：Hi Oblivion-423/gfvfw! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+「does not provide shell access」是**正常的** —— GitHub 的 SSH 只允许 git 操作。
+
+### 2.2 再 clone
+
+```bash
+# 目标目录必须**为空**，否则 git 会拒绝：
+#   fatal: destination path '/srv/gfvfw' already exists and is not an empty directory
+# ⚠️ 若前面已建过 /srv/gfvfw/var 或 bms-data（第 1 步建了），先把它们挪走
+ls -A /srv/gfvfw
+mv /srv/gfvfw/var /srv/var-tmp 2>/dev/null
+mv /srv/gfvfw/bms-data /srv/bms-data-tmp 2>/dev/null
+
+sudo -u gfvfw -H git clone git@github.com:Oblivion-423/gfvfw.git /srv/gfvfw
+
+# 放回
+mv /srv/var-tmp /srv/gfvfw/var 2>/dev/null
+mv /srv/bms-data-tmp /srv/gfvfw/bms-data 2>/dev/null
+chown -R gfvfw:gfvfw /srv/gfvfw
+
+ls /srv/gfvfw      # 应看到 gfvfw/ deploy/ tests/ requirements.txt README.md docs/
+```
+
+因为 clone 用的就是 SSH 地址，`origin` **已经是** `git@github.com:...`，
+所以**不需要** `git remote set-url`，也**不需要** `core.sshCommand`。
+
+```bash
+# 验证以后的 git pull 都能通（update.sh 就靠它）
+sudo -u gfvfw -H bash -c 'cd /srv/gfvfw && git pull --ff-only && git log --oneline -1'
+```
+
+> ⚠️ 用**只读**部署密钥正好合适：服务器只需要 `git pull`，
+> `update.sh` 的回滚靠本地 `git reset --hard`，都不需要推送权限。
+> 这样即使服务器被攻破，也改不了 GitHub 上的代码。
+> **升级流程（§11）不用改。**
 
 ✅ **`var/`（数据库 + 上传文件 + 备份）已被 `.gitignore` 排除**，
 所以 `git clone` / `git pull` **永远不会碰到服务器上的真实数据**。
