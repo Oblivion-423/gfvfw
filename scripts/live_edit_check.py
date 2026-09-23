@@ -286,6 +286,29 @@ def main() -> int:
     check("★ 改密失败后当前会话仍可用（没被踢出/锁死）", status == 200,
           f"status={status}")
 
+    print("\n[11] Logbook 上传（归档 + 声明 ≠ 确认）")
+    status, html = s.get("/account/logbook")
+    check("GET /account/logbook 200", status == 200, f"status={status}")
+    check("页面说明文件不会自动读取", "不会自动读取" in html)
+    check("页面说明 Logbook 与 ACMI 口径不同", "口径不同" in html)
+    check("页面含上传表单", 'enctype="multipart/form-data"' in html)
+    # ⚠️ 只读探针：**不上传任何文件**（上传会写库、写磁盘）。
+    #    这里只验证页面契约与权限边界。
+    status, html = s.get("/members/00000000-0000-0000-0000-000000000000/logbook")
+    check("不存在的成员 Logbook 页 404", status == 404, f"status={status}")
+    token = s.csrf("/account/logbook") or ""
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/confirm", {})
+    check("无 CSRF 的 Logbook 确认被拒（403）", status == 403, f"status={status}")
+    status, _ = s.post("/logbook/00000000-0000-0000-0000-000000000000/confirm",
+                       {"csrf_token": token})
+    check("不存在的归档确认 404", status == 404, f"status={status}")
+    status, _ = s.get("/logbook/00000000-0000-0000-0000-000000000000/download")
+    check("不存在的归档下载 404", status == 404, f"status={status}")
+
+    print("\n[12] 账号页指向 Logbook")
+    status, html = s.get("/account")
+    check("账号页含 Logbook 入口", "/account/logbook" in html)
+
     return report()
 
 

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...db import utcnow
-from ...models import User
+from ...models import LOGIN_ALLOWED_STATUSES, User
 from ...security import (
     MAX_FAILED_LOGINS, SESSION_USER_KEY, hash_password, is_locked, lockout_until,
     needs_rehash, privacy_hash, verify_password, verify_csrf,
 )
 from ..deps import get_db, get_principal, require_login, Principal
 from ..templating import render
+
+log = logging.getLogger("gfvfw.auth")
 
 router = APIRouter()
 
@@ -73,9 +77,20 @@ def login_submit(request: Request,
                       {"error": generic, "username": username, "next_url": target},
                       status_code=401)
 
+    # ⚠️ 状态判定用**白名单**（fail closed）：只有 LOGIN_ALLOWED_STATUSES 里的
+    #    取值能建立会话。这里曾经只判 `== "suspended"`，于是任何未列出的取值
+    #    （线上真实出现过 `disabled`）都能正常登录。
     if user.status == "suspended":
         return render(request, "login.html", {
             "error": "该账号已被停用，请联系管理员。",
+            "username": username, "next_url": target,
+        }, status_code=403)
+
+    if user.status not in LOGIN_ALLOWED_STATUSES:
+        # 未知取值：不告诉对方具体状态（可能是脏数据），但坚决不放行
+        log.warning("拒绝登录：账号 %s 的状态取值未知（%r）", user.username, user.status)
+        return render(request, "login.html", {
+            "error": "该账号当前不可用，请联系管理员。",
             "username": username, "next_url": target,
         }, status_code=403)
 

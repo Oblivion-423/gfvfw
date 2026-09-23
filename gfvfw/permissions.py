@@ -27,6 +27,13 @@ MEMBER_VIEW_PRIVATE = "member.private.view"    # command 层：联系方式等
 # ---- 入队流水线 ----
 APPLICATION_REVIEW = "application.review"      # 审批招新申请
 
+# ---- BMS Logbook ----
+#: 上传**自己的** Logbook（``.lbk``）并填写从中读出的声明值。
+#: 声明值在未确认前不影响名册 —— 所以给普通成员是安全的。
+LOGBOOK_UPLOAD = "logbook.upload"
+#: 代他人上传（教官/指挥代收，或帮新成员建档）。
+LOGBOOK_UPLOAD_ANY = "logbook.upload.any"
+
 # ---- 飞行日志 ----
 LOG_VIEW = "log.view"
 LOG_EDIT_OWN = "log.edit.own"
@@ -68,6 +75,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset({
     MEMBER_VIEW, MEMBER_CREATE, MEMBER_EDIT, MEMBER_DELETE, MEMBER_EDIT_RANK,
     MEMBER_VIEW_PRIVATE,
     APPLICATION_REVIEW,
+    LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY,
     LOG_VIEW, LOG_EDIT_OWN, LOG_EDIT_ANY, LOG_APPROVE, LOG_DELETE,
     ACMI_UPLOAD, ACMI_UPLOAD_ANY, ACMI_CONFIRM, ACMI_CLAIM_PILOT, ACMI_MANAGE_ALIAS,
     CAMPAIGN_MANAGE, CAMPAIGN_VIEW, CAMPAIGN_UPLOAD,
@@ -90,6 +98,7 @@ ROLE_DEFINITIONS: dict[str, tuple[str, int, frozenset[str]]] = {
         MEMBER_VIEW, MEMBER_CREATE, MEMBER_EDIT, MEMBER_DELETE, MEMBER_EDIT_RANK,
         MEMBER_VIEW_PRIVATE,
         APPLICATION_REVIEW,
+        LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY,
         LOG_VIEW, LOG_EDIT_ANY, LOG_APPROVE, LOG_DELETE,
         ACMI_UPLOAD, ACMI_UPLOAD_ANY, ACMI_CONFIRM, ACMI_CLAIM_PILOT,
         ACMI_MANAGE_ALIAS,
@@ -100,6 +109,7 @@ ROLE_DEFINITIONS: dict[str, tuple[str, int, frozenset[str]]] = {
     })),
     "instructor": ("教官", 60, frozenset({
         MEMBER_VIEW,
+        LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY,
         LOG_VIEW, LOG_EDIT_ANY, LOG_APPROVE,
         ACMI_UPLOAD, ACMI_UPLOAD_ANY, ACMI_CLAIM_PILOT,
         CAMPAIGN_MANAGE, CAMPAIGN_VIEW, CAMPAIGN_UPLOAD,
@@ -107,6 +117,7 @@ ROLE_DEFINITIONS: dict[str, tuple[str, int, frozenset[str]]] = {
     })),
     "member": ("成员", 40, frozenset({
         MEMBER_VIEW,
+        LOGBOOK_UPLOAD,
         LOG_VIEW, LOG_EDIT_OWN,
         ACMI_UPLOAD,
         CAMPAIGN_VIEW,

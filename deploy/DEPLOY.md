@@ -445,16 +445,22 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; \
 
 若走反代，把地址换成 `https://你的域名` 更贴近真实（会顺带验证 Cookie/跳转）。
 
-**它不会改动任何数据**，只做 GET 与"注定被拒"的 POST。
+**它不会改动任何数据**，只做 GET 与"注定被拒"的 POST（不上传文件）。
 期望输出末尾：
 
 ```
-实况核查：48 项，通过 48，失败 0
+实况核查：65 项，通过 65，失败 0
 ```
 
 > ⚠️ 账号密码**从环境变量读**（`GFVFW_LIVE_USER` / `GFVFW_LIVE_PASSWORD`），
-> 脚本里只留了一个本机开发用的默认值 —— **不要**把生产密码写进脚本，
-> 那等于把它提交到 git 历史里。
+> 脚本里只留了一个本机开发用的默认值。**改过密码后必须显式传环境变量**，
+> 否则探针会停在「登录成功」这一步失败：
+>
+> ```bash
+> GFVFW_LIVE_PASSWORD='你的密码' .venv/bin/python scripts/live_edit_check.py
+> ```
+>
+> 不要为了跑探针把密码写回脚本 —— 那等于把它提交到 git 历史里。
 > 输出里的 `SKIP` 不是失败 —— 例如"库里没有待归并的 ACMI"时，
 > 那项边界无法在真实数据上验证，属于正常跳过。
 
@@ -504,10 +510,20 @@ sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.
 
 应用启动时会调 `services/schema_sync.py` **自动补上缺失的列**
 （`create_all` 不会加列 —— 这是曾经踩过的坑：生产环境报 `no such column`）。
+**新建的表**则由 `create_all` 负责创建（它只建缺失的表，不动已有表）。
+
+所以两类结构变更升级时都会自动处理，启动日志会明确打印补了哪些列：
+
+```
+自动补列：ALTER TABLE members ADD COLUMN logbook_hours_seconds INTEGER（…）
+启动时补齐了 4 个缺失列，请确认是否为预期的模型变更
+```
+
+**升级后请看一眼日志**，确认补的列正是这次版本该补的 —— 这是当前唯一的"迁移记录"。
 
 这是**开发期权宜方案**：
 
-- 只**加列**，不会改类型、不会删列、不会重建索引；
+- 只**加列/加表**，不会改类型、不会删列、不会重建索引；
 - 没有版本记录，**无法回滚**；
 - 多进程并发启动时理论上有竞争（本项目固定单进程，故风险低）。
 
@@ -529,6 +545,8 @@ sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.
 | 补录一条架次（文件丢了） | 任务详情 →「补录架次」 | `log.approve`（教官/指挥） |
 | 删传错的 ACMI（未归并的） | ACMI 工作台 → 上传阶段 →「删除」 | `acmi.upload`（自己的） |
 | 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
+| 上传/更换 Logbook | 账号页 →「我的 Logbook」 | `logbook.upload`（自己的） |
+| 确认 Logbook 声明值写入名册 | 成员档案 → Logbook 页 →「确认写入名册」 | `member.rank.edit`（仅指挥/管理员） |
 
 两个**有意设计**的约束：
 

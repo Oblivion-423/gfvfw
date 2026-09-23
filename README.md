@@ -22,16 +22,17 @@
 | **ACMI 工作台内嵌进飞行记录 / 战役管理** | ✅ **完成**，含自动归入战役 |
 | **上线后人工修正（任务/架次可编辑删除、补录、删 ACMI、删存档）** | ✅ **完成**，67 个断言通过 |
 | **账号与密码（自助改密 + CLI 运维重置）** | ✅ **完成**，58 个断言通过 |
+| **BMS Logbook 上传（归档 + 声明值 + 指挥确认）** | ✅ **完成**，104 个断言通过 |
 | 资料查询 | ⬜ **待实现**（表已建，`/library` 有占位说明） |
 | **部署产物（systemd / Caddy / 备份 / 一键升级）** | ✅ **完成** → `deploy/DEPLOY.md` |
-| **纳入 git 版本管理** | ✅ **完成**（首个提交 `5b13440`，125 文件，LF 已强制） |
+| **纳入 git 版本管理** | ✅ **完成**（首个提交 `5b13440`，LF 已强制） |
 | 实际部署到 VPS | ⬜ 待你在服务器上执行 |
 | Alembic 迁移 | ⬜ 未接（现靠 `schema_sync` 自动补列） |
 
-**测试合计 766 个断言，0 失败**（`.venv\Scripts\python.exe -m pytest -q` → 10 passed）
+**测试合计 870 个断言，0 失败**（`.venv\Scripts\python.exe -m pytest -q` → 11 passed）
 > 里面 **1 组会跳过**：战役管理的「与 `campaign_state.json` 对拍」需要真实存档，
 > 设 `GFVFW_TEST_CAM` 与 `GFVFW_TEST_STATE_JSON` 指向配套的 `.cam` 与 CamReader 输出即可跑满。
-> 上表 10 个套件相加正好 766（65+36+67+103+87+61+65+67+58+157），与 `pytest` 一致。
+> 上表 11 个套件相加正好 870（65+36+67+103+87+61+65+67+58+104+157），与 `pytest` 一致。
 
 ---
 
@@ -230,6 +231,55 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
 > ⚠️ `create-admin` 打印的「请立即登录并修改密码」以前是一句空话 ——
 > 当时**根本没有改密入口**。现在这句话真的能执行了。
 
+### BMS Logbook 上传（成员自助 + 指挥确认）
+
+需求 §4.8 把**军衔 / 资质 / 累计飞行量**的口径来源定为 BMS Logbook。
+§8.1 当时因为"看起来是强混淆二进制"而把自动导入降级为可选。这一轮**做了实测**，
+结论没变，但现在有证据：
+
+| 实测项 | 结果 |
+|---|---|
+| 四个真实样本大小 | **都是 372 字节**（定长结构） |
+| 重复结构 | 每个样本在 `0x00E8` 起有**周期 42** 的重复块 |
+| 两个样本的关系 | `Obsequies` 与 `SZSZS` 在偏移 189 起 **177 字节完全相同** |
+| 常量密钥假设 | **不成立** —— "明文含呼号 + 固定 XOR 密钥"模型被逐偏移交叉检验否决 |
+| 官方读取器 | `Tools\Logbook Editor\LogbookEditor.exe`，142 KB，**32 位 MinGW/Qt4** |
+| 加密 API | **一个都没导入**（只有 KERNEL32 / msvcrt / Qt4 / MinGW）→ 混淆是**内联自实现** |
+
+复现脚本：`scripts/lbk_probe.py`（结构）、`lbk_keyrecover.py`（密钥恢复尝试）、
+`pe_strings.py`（PE 导入表与字符串）。
+
+> ⚠️ 即便把格式逆向出来，**BMS 版本升级可能改动它并静默读出错数据** ——
+> 这正是当初降级的理由，今天依然成立。所以正式方案是**归档 + 手填 + 确认**。
+
+#### 工作流
+
+```
+成员上传 .lbk ──→ 归档（SHA256 去重、可下载、可删除重传）
+      │
+      └─→ 从 LogbookEditor 界面照抄数值 → 填「声明值」→ 待确认
+                    │
+                    └─→ 指挥/管理员「确认写入名册」→ 军衔 / 资质 / 累计量 落到名册
+```
+
+页面：`/account/logbook`（自己的）、`/members/{id}/logbook`（教官/指挥代他人）。
+
+#### 三条关键设计
+
+1. **声明值 ≠ 名册记录。** 成员填的军衔/累计时长落在
+   `logbook_files.declared_*`，**确认前不影响名册**。
+   否则任何成员都能自封飞行时数与军衔。确认需要 `member.rank.edit`
+   （**只有联队指挥与超级管理员**有）。
+2. **确认时资质只同步 `source='logbook'` 的那一批。** 手动授予的资质
+   不会被一次 Logbook 确认抹掉 —— 否则教官的考核记录会被无意清空。
+3. **Logbook 累计量与 ACMI 统计口径不同，页面上分别标注。**
+   Logbook 是**跨存档历史总量**（含本站上线前的飞行），
+   ACMI 统计只算本站已归档的架次。两者对不上是正常的，不要互相校验。
+
+新增权限点：`logbook.upload`（成员可上传自己的）、`logbook.upload.any`（教官/指挥代传）。
+`logbook_files` 是**硬删除**（同 `acmi_files`：`(member_id, sha256)` 唯一约束要求
+"删了才能重传同一个文件"）。
+
 ### 已完成端到端验证（真实数据）
 
 用一份真实 ACMI（482 KB）走通完整链路，结果正确：
@@ -378,6 +428,7 @@ gfvfw/
     camdata.py          .tea/.evt/.pol/.pst/.obj 解析
   services/
     ingest.py         摄入服务：上传→解析→归并→确认入库、认领、机型登记
+    logbook.py        Logbook 归档与名册同步（声明值 ≠ 名册记录；确认才写入）
     stats.py          统计与查询（口径集中在此；METERS_PER_NM 唯一定义点）
     campaigns.py      战役汇总（任务数/架次/时长/航程/参战/战损）
     campaign.py       战役存档上报：去重→解析→入库→算目标点易手
@@ -388,12 +439,14 @@ gfvfw/
     app.py             应用装配（中间件顺序、异常处理、路由挂载）
     deps.py            Principal 身份对象 + require() 权限守卫（依赖工厂！）
     templating.py      Jinja2 环境与过滤器（UTC→UTC+8、单位换算、fromjson）
-    routers/           home / auth / account（自助改密）/ members / acmi
-                       / missions / sorties / campaigns / theater（战役管理）
+    routers/           home / auth / account（自助改密）/ logbook（Logbook 上传）
+                       / members / acmi / missions / sorties / campaigns
+                       / theater（战役管理）
                        / stats（含飞行记录三子页）/ placeholders（仅资料查询）
     forms.py           表单解析与单位换算统一入口（UTC+8⇄UTC、时长、海里）
     templates/         base + home + login
                        + account/password.html（账号与改密）
+                       + logbook/page.html（Logbook 归档 + 声明 + 确认）
                        + members/* + missions/*（含 form/delete）
                        + sorties/form.html（架次编辑 + 补录）
                        + campaigns/*
@@ -423,7 +476,14 @@ scripts/              开发期工具（不参与线上流程）
   cam_state_probe.py    完整战役态势与 campaign_state.json 全量对拍
   live_edit_check.py    对**运行中的服务**做只读实况核查：登录→逐页检查关键文案
                         与按钮→构造应被拒绝的请求（CSRF 缺失 403、不存在 id 404、
-                        已归并 ACMI 400）。48 项，不改动任何数据
+                        已归并 ACMI 400）。65 项，不上传文件、不改动数据。
+                        密码从 GFVFW_LIVE_PASSWORD 读
+  lbk_probe.py          BMS .lbk 结构分析（长度/周期/两两异或/字节分布/头部对比）
+  lbk_keyrecover.py     尝试恢复重复密钥流（结论：常量密钥模型不成立）
+  pe_strings.py         纯标准库提取 PE 节表、导入表与字符串（判断是否用加密 API）
+  audit_authz_callsites.py  静态检查每个 principal.can() 调用点是否处在
+                        require() 守卫之下（防"看起来有权限判断其实没有"）
+  audit_client_fingerprints.py  按 UA 指纹归属审计记录（"到底是谁改的"）
 
 tests/
   acmi_parser_selfcheck.py   解析器自校验（65 断言，含"标记不从 0 开始"的
@@ -444,6 +504,9 @@ tests/
   account_selfcheck.py       账号与密码：自助改密（验原密码/拒绝路径）、
                              CLI 运维重置（含解除锁定）、Web 与 CLI 共用强度策略、
                              只能改自己的密码（58 断言）
+  logbook_selfcheck.py       Logbook：归档校验/去重、声明值不直接影响名册、
+                             确认写入名册、资质只同步 logbook 来源、
+                             权限边界（403）、删除后可重传（104 断言）
   campaign_theater_selfcheck.py  战役管理：坐标/LZSS/容器/权限/数据表/真实解析
                              /上报管线/易手检测/页面/底图与比例尺
                              /无 BMS 部署契约/删除存档回退（157 断言）
@@ -519,6 +582,11 @@ deploy/                上线产物（VPS 部署用，不参与本地开发）
 | CLI 重置是否顺带解锁 | **顺带解锁 + 清失败计数** | 账号被锁时正是最需要重置的场景。只换哈希会让人以为重置失败 |
 | 改密后是否踢出其他会话 | **做不到，且明说** | 会话 Cookie 只存用户标识，没有版本号可作废。与其假装安全，不如在页面上写清并给出"联系运维停用"的路径 |
 | 改密失败是否计入登录失败次数 | **不计** | 否则用户改密时打错两次原密码就被锁在门外 |
+| 账号状态判定 | **白名单**：只有 `active` 有权限、只有 `(pending, active)` 能登录 | 原先写成黑名单 `status == "suspended"`，于是线上一个取值 `disabled` 的账号**能正常登录**，还带着名册角色显示成「超级管理员」。未知取值现在一律 fail closed |
+| Logbook 为什么不自动解析 | **实测后仍然不解析**，改为归档 + 手填 + 确认 | 定长 372B、周期 42、非常量 XOR、官方读取器无任何加密 API 导入 → 混淆是内联自实现。且 BMS 升级可能**静默**改动格式。见「BMS Logbook 上传」 |
+| Logbook 声明值是否直接改名册 | **不直接改**，需要有人**确认** | 否则任何成员都能自封飞行时数与军衔。确认需要 `member.rank.edit`（指挥/管理员） |
+| 确认时是否重建全部资质 | **只同步 `source='logbook'` 的那一批** | 否则教官手工授予的资质会被一次 Logbook 确认静默撤销 |
+| Logbook 与 ACMI 的时长 | **口径不同，分别标注，不互相校验** | Logbook 是跨存档历史总量（含本站上线前），ACMI 只算本站已归档架次 |
 
 ---
 

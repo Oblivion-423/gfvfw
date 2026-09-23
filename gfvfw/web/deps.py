@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
-from ..models import Member, MemberRole, Role, User
+from ..models import ACTIVE_STATUS, Member, MemberRole, Role, User
 from ..permissions import highest_role, permissions_for, role_name
 from ..security import SESSION_USER_KEY
 
@@ -104,8 +104,8 @@ ANONYMOUS = Principal()
 def load_principal(db: Session, request: Request) -> Principal:
     """从签名会话还原身份。
 
-    ⚠️ 账号被停用（``suspended``）时权限集清空 —— 保留登录态以便显示提示，
-    但不能执行任何需要权限的操作。
+    ⚠️ **只有明确激活（``active``）的账号才获得权限点**，其余一律清空。
+    这是**白名单**判定，不是黑名单 —— 原因见下方注释。
     """
     uid = request.session.get(SESSION_USER_KEY) if hasattr(request, "session") else None
     if not uid:
@@ -119,9 +119,11 @@ def load_principal(db: Session, request: Request) -> Principal:
 
     member = db.get(Member, user.member_id) if user.member_id else None
 
+    is_active = user.status == ACTIVE_STATUS
+
     # 角色：只取未撤销的分配
     role_codes: list[str] = []
-    if member is not None:
+    if member is not None and is_active:
         rows = db.execute(
             select(Role.code)
             .join(MemberRole, MemberRole.role_id == Role.id)
@@ -129,15 +131,25 @@ def load_principal(db: Session, request: Request) -> Principal:
                    MemberRole.revoked_at.is_(None))
         ).scalars().all()
         role_codes = list(rows)
+    elif not is_active:
+        # ⚠️ 非激活账号**连角色名都不给**。
+        #    否则界面上会出现"这个待审批账号显示为超级管理员"这种自相矛盾的画面 ——
+        #    实测 `pending` 与 `disabled` 账号正是如此（见 tests/account_selfcheck.py）。
+        role_codes = []
 
     # 未分配角色但账号已激活 → 兜底为最小角色 member，
     # 避免"已激活却什么都看不到"的荒谬状态。
-    if not role_codes and user.status == "active":
+    if not role_codes and is_active:
         role_codes = ["member"]
 
-    perms = permissions_for(role_codes)
-    if user.status == "suspended":
-        perms = frozenset()
+    # ⚠️ 白名单：只有 `active` 才有权限点。
+    #    这里曾经写成 `if user.status == "suspended": perms = frozenset()` ——
+    #    那是**黑名单**：任何未列出的状态取值（`pending`、`disabled`、
+    #    以及将来新增的任何值）都会**保留全部权限**。
+    #    而权限判定不只出现在 `Depends(require(...))` 里，也出现在
+    #    路由体与模板的 `principal.can(...)` 中 —— 黑名单等于给这些调用点
+    #    埋了一颗"加个新状态就爆炸"的雷。
+    perms = permissions_for(role_codes) if is_active else frozenset()
 
     return Principal(user=user, member=member,
                      role_codes=role_codes, permissions=perms)

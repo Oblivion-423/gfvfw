@@ -65,7 +65,36 @@
   <dl class="meta">
     <dt>呼号</dt><dd>{{ member.callsign }}</dd>
     <dt>队号</dt><dd class="mono">{{ member.service_number or '—' }}</dd>
-    <dt>军衔</dt><dd>{{ member.rank.name ~ ' / ' ~ member.rank.name_en if member.rank else '—' }}</dd>
+    <dt>军衔</dt><dd>
+      {{ member.rank.name ~ ' / ' ~ member.rank.name_en if member.rank else '—' }}
+      {% if member.rank and member.rank_source == 'logbook' %}
+        <span class="badge ok">来源 Logbook</span>
+      {% endif %}
+    </dd>
+    <dt>Logbook 累计</dt><dd>
+      {% if member.logbook_hours_seconds is not none or member.logbook_sorties is not none %}
+        {{ member.logbook_hours_seconds | dur if member.logbook_hours_seconds is not none else '—' }}
+        ·
+        {{ member.logbook_sorties if member.logbook_sorties is not none else '—' }} 架次
+        <span class="hint">（Logbook 跨存档历史总量，与本站飞行统计口径不同）</span>
+      {% else %}
+        <span class="muted">未登记</span>
+      {% endif %}
+    </dd>
+    <dt>Logbook 归档</dt><dd>
+      {% if logbook_count %}
+        {{ logbook_count }} 份
+        {% if logbook_pending %}<span class="badge warn">{{ logbook_pending }} 待确认</span>{% endif %}
+        {% if can_manage_logbook %}
+          <a href="/members/{{ member.id }}/logbook">管理</a>
+        {% endif %}
+      {% else %}
+        <span class="muted">无</span>
+        {% if can_manage_logbook %}
+          — <a href="/members/{{ member.id }}/logbook">上传归档</a>
+        {% endif %}
+      {% endif %}
+    </dd>
     <dt>状态</dt><dd>{{ status_labels.get(member.status, member.status) }}</dd>
     <dt>入队日期</dt><dd>{{ member.joined_at|date }}</dd>
     {% if member.left_at %}<dt>离队日期</dt><dd>{{ member.left_at|date }}</dd>{% endif %}

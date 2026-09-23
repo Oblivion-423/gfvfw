@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Logbook · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Logbook</h1>
+    <div class="sub">当前账号未绑定名册成员</div>
+  </div>
+</div>
+
+<div class="panel">
+  <p class="small" style="margin:0">
+    你的账号（<strong>{{ principal.user.username }}</strong>）目前<strong>没有绑定名册成员</strong>，
+    因此没有可以挂载 Logbook 的对象。
+  </p>
+  <p class="small muted" style="margin:8px 0 0">
+    Logbook 是「某个飞行员的游戏内存档」，必须归属到名册里的一个人。
+    纯管理员账号（只做运维、不飞行）不需要上传 Logbook —— 这是正常状态。
+    如果本应绑定，请让指挥 / 管理员在成员档案页把账号与名册关联起来。
+  </p>
+</div>
+{% endblock %}

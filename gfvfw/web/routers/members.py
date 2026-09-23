@@ -24,8 +24,10 @@ from ...models import (
     Role, Sortie,
 )
 from ...permissions import (
-    MEMBER_CREATE, MEMBER_DELETE, MEMBER_EDIT, MEMBER_EDIT_RANK, MEMBER_VIEW,
+    LOGBOOK_UPLOAD_ANY, MEMBER_CREATE, MEMBER_DELETE, MEMBER_EDIT,
+    MEMBER_EDIT_RANK, MEMBER_VIEW,
 )
+from ...services import logbook as LB
 from ...services.audit import record_audit
 from ..deps import Principal, get_db, get_principal, require
 from ..templating import render
@@ -240,6 +242,10 @@ def member_detail(member_id: str, request: Request,
         "qualifications": qualifications,
         "roles": list(role_codes),
         "can_manage": principal.can(MEMBER_EDIT),
+        # Logbook 归档（本页只显示摘要 + 入口，完整操作在专用页面）
+        "logbook_count": len(LB.list_for_member(db, member.id)),
+        "logbook_pending": len(LB.pending_for_member(db, member.id)),
+        "can_manage_logbook": principal.can(LOGBOOK_UPLOAD_ANY),
     })
 
 

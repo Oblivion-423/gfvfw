@@ -1,0 +1,303 @@
+{% extends "base.html" %}
+{% block title %}Logbook · {{ member.callsign }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{% if is_self %}我的 Logbook{% else %}Logbook · {{ member.callsign }}{% endif %}</h1>
+    <div class="sub">
+      归档 BMS Logbook 原件，并把其中的军衔 / 资质 / 累计飞行量登记到名册
+    </div>
+  </div>
+  <div>
+    {% if is_self %}
+      <a class="btn ghost" href="/account">账号</a>
+    {% else %}
+      <a class="btn ghost" href="/members/{{ member.id }}">成员档案</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if changed %}<div class="flash ok">已保存。</div>{% endif %}
+
+{% if did == 'uploaded' %}<div class="flash ok">Logbook 已归档。</div>{% endif %}
+{% if did == 'declared' %}<div class="flash ok">声明值已记录 —— 尚未写入名册，等待核对确认。</div>{% endif %}
+{% if did == 'confirmed' %}<div class="flash ok">已确认，名册记录已更新。</div>{% endif %}
+{% if did == 'nothing' %}<div class="flash info">确认完成，但名册记录没有变化（声明值与此前一致）。</div>{% endif %}
+{% if did == 'deleted' %}<div class="flash ok">归档已删除，原件也已从服务器清理，可以重新上传。</div>{% endif %}
+{% if did == 'nofile' %}<div class="flash warn">没有选择文件。</div>{% endif %}
+
+{# ------------------------------------------------------------------ #}
+{# 关于"为什么不自动解析"—— 这是本页最关键的一段说明，不要删 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">先读这段：文件会被归档，但<strong>不会自动读取</strong></h2>
+  <p class="small" style="margin-top:-4px">
+    BMS 的 <code>.lbk</code> 是私有二进制格式，我们实测了四个真实样本后确认
+    无法可靠解析：四个文件都是定长 372 字节、尾部有周期 42 的重复块，
+    <strong>不是简单的固定密钥异或</strong>；官方读取工具
+    <code>Tools\Logbook Editor\LogbookEditor.exe</code> 是 32 位 Qt4 程序，
+    且<strong>没有导入任何系统加密 API</strong>（混淆是内联自实现的）。
+    即便逆向出格式，BMS 版本升级也可能改动它并<strong>静默</strong>读出错数据。
+  </p>
+  <p class="small muted" style="margin-bottom:0">
+    所以这里的做法是：<strong>归档原件 + 你手填数值 + 指挥确认</strong>。
+    原件会被完整保存（按 SHA256 去重），随时可下载回本地核对 ——
+    将来若真的支持解析，已归档的文件可以直接复用。
+  </p>
+</div>
+
+{# ------------------------------------------------------------------ #}
+{# 当前名册记录 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">名册中的记录</h2>
+  <table>
+    <tbody>
+      <tr>
+        <th style="width:180px">军衔</th>
+        <td>
+          {% if member.rank %}
+            {{ member.rank.name }}（{{ member.rank.name_en }}）
+            <span class="badge {{ 'ok' if member.rank_source == 'logbook' else '' }}">
+              来源：{{ 'Logbook' if member.rank_source == 'logbook' else '人工录入' }}
+            </span>
+          {% else %}
+            <span class="muted">未设置</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Logbook 累计时长</th>
+        <td>
+          {% if member.logbook_hours_seconds is not none %}
+            {{ member.logbook_hours_seconds | dur }}
+          {% else %}<span class="muted">未登记</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>Logbook 累计架次</th>
+        <td>
+          {% if member.logbook_sorties is not none %}
+            {{ member.logbook_sorties }}
+          {% else %}<span class="muted">未登记</span>{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>登记时间 / 登记人</th>
+        <td class="small muted">
+          {% if member.logbook_updated_at %}
+            {{ member.logbook_updated_at | datetime }}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>资质</th>
+        <td>
+          {% set held = qualifications | selectattr('id', 'in', held_qualification_ids) | list %}
+          {% if held %}
+            {% for q in held %}
+              <span class="badge">{{ q.name }}</span>
+            {% endfor %}
+          {% else %}
+            <span class="muted">无</span>
+          {% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:10px 0 0">
+    ⚠️ <strong>「Logbook 累计时长」与飞行记录的统计口径不同，不要互相校验：</strong>
+    前者是 Logbook 里的<strong>跨存档历史总量</strong>（含本站上线前的飞行），
+    后者只统计本站已归档的 ACMI 架次。两者对不上是正常的。
+  </p>
+</div>
+
+{# ------------------------------------------------------------------ #}
+{# 上传 #}
+{# ------------------------------------------------------------------ #}
+{% if can_upload %}
+<div class="panel">
+  <h2 style="margin-top:0">上传 Logbook 文件</h2>
+  <form method="post" enctype="multipart/form-data"
+        action="{% if is_self %}/account/logbook/upload{% else %}/members/{{ member.id }}/logbook/upload{% endif %}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p>
+      <label for="file">文件（<code>.lbk</code>）</label><br>
+      <input type="file" id="file" name="file" accept=".lbk" required>
+      <br><span class="hint">
+        位置：BMS 安装目录的 <code>User\Config\&lt;你的呼号&gt;.lbk</code>。
+        一个文件对应一个飞行员，不要传别人的。
+        上限 {{ max_kb }} KB。
+      </span>
+    </p>
+    <p>
+      <label for="note">说明（可选）</label><br>
+      <input type="text" id="note" name="note" maxlength="200" style="width:340px">
+      <br><span class="hint">例如「换电脑后重开档，累计清零」—— 便于日后看懂这份存档的来历。</span>
+    </p>
+    <p><button class="btn" type="submit">上传并归档</button></p>
+  </form>
+</div>
+{% endif %}
+
+{# ------------------------------------------------------------------ #}
+{# 声明值 #}
+{# ------------------------------------------------------------------ #}
+{% if current and can_upload %}
+<div class="panel">
+  <h2 style="margin-top:0">把 Logbook 里的数值填进来</h2>
+  <p class="small muted" style="margin-top:-4px">
+    用 <code>LogbookEditor.exe</code> 打开你的 <code>.lbk</code>，照着界面把下面几项填进来。
+    <strong>填完不会立刻改名册</strong> —— 需要指挥 / 管理员核对确认后才写入。
+  </p>
+  <form method="post" action="/logbook/{{ current.id }}/declare">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <table>
+      <tbody>
+        <tr>
+          <th style="width:180px"><label for="rank_id">军衔</label></th>
+          <td>
+            <select id="rank_id" name="rank_id">
+              <option value="">（不填 / 未变）</option>
+              {% for r in ranks %}
+                <option value="{{ r.id }}"
+                  {{ 'selected' if current.declared_rank_id == r.id else '' }}>
+                  {{ r.level }} · {{ r.name }}
+                </option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="hours">累计飞行时长（小时）</label></th>
+          <td>
+            <input type="text" id="hours" name="hours" style="width:120px"
+                   value="{{ '%.1f' % (current.declared_hours_seconds / 3600) if current.declared_hours_seconds is not none else '' }}">
+            <span class="hint">可带小数，例如 <code>123.5</code></span>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="sorties">累计架次</label></th>
+          <td>
+            <input type="text" id="sorties" name="sorties" style="width:120px"
+                   value="{{ current.declared_sorties if current.declared_sorties is not none else '' }}">
+          </td>
+        </tr>
+        <tr>
+          <th>资质</th>
+          <td>
+            {% set dq = current.declared_qualification_ids() %}
+            {% for q in qualifications %}
+              <label style="display:inline-block;margin:0 14px 6px 0">
+                <input type="checkbox" name="qualification_ids" value="{{ q.id }}"
+                       {{ 'checked' if q.id in dq else '' }}>
+                {{ q.name }}
+              </label>
+            {% else %}
+              <span class="muted small">资质字典为空，请先在「成员」页维护资质定义。</span>
+            {% endfor %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <p><button class="btn" type="submit">保存声明值</button></p>
+  </form>
+</div>
+{% endif %}
+
+{# ------------------------------------------------------------------ #}
+{# 待确认 #}
+{# ------------------------------------------------------------------ #}
+{% if pending %}
+<div class="panel">
+  <h2 style="margin-top:0">待确认的声明（{{ pending | length }}）</h2>
+  {% if not can_confirm %}
+  <p class="small muted" style="margin-top:-4px">
+    写入名册属于敏感变更，需要「军衔/资质编辑」权限（联队指挥 / 超级管理员）。
+    当前账号无此权限，可以查看但不能确认。
+  </p>
+  {% endif %}
+  <table>
+    <thead>
+      <tr><th>归档时间</th><th>文件</th><th>声明的军衔</th>
+          <th>累计时长</th><th>累计架次</th><th>资质</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for f in pending %}
+      <tr>
+        <td class="small">{{ f.created_at | datetime }}</td>
+        <td class="small">{{ f.original_filename }}</td>
+        <td>{{ f.declared_rank.name if f.declared_rank else '—' }}</td>
+        <td>{{ f.declared_hours_seconds | dur if f.declared_hours_seconds is not none else '—' }}</td>
+        <td>{{ f.declared_sorties if f.declared_sorties is not none else '—' }}</td>
+        <td class="small">
+          {% set dq = f.declared_qualification_ids() %}
+          {% if dq %}{{ dq | length }} 项{% else %}—{% endif %}
+        </td>
+        <td>
+          {% if can_confirm %}
+          <form method="post" action="/logbook/{{ f.id }}/confirm" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn" type="submit">确认写入名册</button>
+          </form>
+          {% else %}
+          <span class="muted small">无权限</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{# ------------------------------------------------------------------ #}
+{# 已归档列表 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">已归档的 Logbook（{{ files | length }}）</h2>
+  {% if not files %}
+    <p class="muted small" style="margin:0">还没有归档任何 Logbook。</p>
+  {% else %}
+  <table>
+    <thead>
+      <tr><th>归档时间</th><th>文件</th><th>大小</th><th>SHA256</th>
+          <th>状态</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for f in files %}
+      <tr>
+        <td class="small">{{ f.created_at | datetime }}</td>
+        <td class="small">
+          {{ f.original_filename }}
+          {% if f.note %}<br><span class="muted">{{ f.note }}</span>{% endif %}
+        </td>
+        <td class="small">{{ f.size_bytes | filesize }}</td>
+        <td class="small"><code>{{ f.sha256[:16] }}…</code></td>
+        <td>
+          {% if f.confirmed_at %}
+            <span class="badge ok">已确认</span>
+          {% elif f.has_declaration() %}
+            <span class="badge warn">待确认</span>
+          {% else %}
+            <span class="badge">仅归档</span>
+          {% endif %}
+        </td>
+        <td class="small">
+          <a href="/logbook/{{ f.id }}/download">下载</a>
+          {% if can_upload %}
+          <form method="post" action="/logbook/{{ f.id }}/delete" style="display:inline"
+                onsubmit="return confirm('删除这份归档？原件会一并从服务器清理。');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn ghost" type="submit">删除</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

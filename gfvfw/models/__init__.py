@@ -8,8 +8,10 @@
 """
 
 from .identity import (  # noqa: F401
-    AircraftType, Application, Member, MemberQualification, MemberRole,
-    Qualification, Rank, Role, RolePermission, User,
+    ACTIVE_STATUS, AircraftType, Application, DATA_SOURCE_VALUES,
+    LOGIN_ALLOWED_STATUSES, LogbookFile, Member, MemberQualification,
+    MemberRole, Qualification, Rank, Role, RolePermission, USER_STATUSES,
+    USER_STATUS_LABELS, User,
 )
 from .flight import (  # noqa: F401
     Campaign, Mission, Sortie, SortieEvent, UploadStatus,

@@ -95,3 +95,14 @@ def test_account_suite():
     """
     _assert_no_failures(_load("account_selfcheck.py"), "account")
 
+
+def test_logbook_suite():
+    """BMS Logbook 上传与名册同步。
+
+    ``.lbk`` 是私有二进制格式（实测四个样本确认为定长 + 非固定密钥混淆，
+    无法可靠解析，见 requirements §8.1），所以这里是**归档原件 + 手填数值 +
+    指挥确认**：声明值不直接影响名册，确认才写入，且资质只同步
+    ``source='logbook'`` 的那一批。
+    """
+    _assert_no_failures(_load("logbook_selfcheck.py"), "logbook")
+
