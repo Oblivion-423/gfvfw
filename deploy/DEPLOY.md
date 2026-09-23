@@ -4,7 +4,95 @@
 自上而下照做即可，每步都给出了**验证命令**。
 
 > 假设：你在开发机（Windows）上开发，VPS 是 Linux。
-> 若 VPS 发行版不是 Debian 系，第 1、8 步的包管理命令需要换算。
+
+---
+
+## 0.0 你的发行版是 RHEL 系吗？（**先看这一节**）
+
+本手册正文按 **Debian 系**写。**阿里云 ECS / Alibaba Cloud Linux / CentOS / Rocky /
+AlmaLinux / Fedora 等 RHEL 系**主机不能照抄，主要是四处差异：
+
+| 差异 | Debian 系 | RHEL 系 |
+|---|---|---|
+| 包管理 | `apt install` | `dnf install` |
+| 包名 | `python3-venv`（单独装） | venv 随 `python3` 提供；pip 要 `python3-pip` |
+| **Python 版本** | 12/22.04 自带 3.11 ✓ | **Alinux 3 / RHEL 8 默认是 3.6.9 ✗**，必须另装 3.11+ |
+| Caddy 安装 | Cloudsmith `deb` 仓库 | COPR 仓库或**官方静态二进制** |
+| 防火墙 | 通常无（靠安全组） | 常有 `firewalld`，要放行 80/443 |
+
+先跑这几条确认环境：
+
+```bash
+cat /etc/os-release | head -3      # 看是什么系统
+python3 --version                  # ⚠️ 必须 ≥ 3.10
+getenforce                         # SELinux：Enforcing 时要留意
+systemctl is-active firewalld      # 防火墙是否在跑
+```
+
+### RHEL 系的对应命令
+
+**系统准备（替代正文第 1 步）**
+
+```bash
+sudo dnf install -y python3 python3-pip rsync git
+
+# ⚠️ 如果 python3 --version 低于 3.10，装一个够新的：
+sudo dnf install -y python3.11 python3.11-pip   # Alinux 3 / Rocky 8+ 一般有
+# 或走模块：sudo dnf module install -y python311/common
+# 之后所有命令里的 python3 都要换成 python3.11
+```
+
+**防火墙（替代第 0 步"端口开放"）**
+
+```bash
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+```
+
+> ⚠️ **阿里云 ECS 还有一层「安全组」在操作系统之外**：必须到
+> ECS 控制台 → 该实例 → 安全组 → 入方向规则，放行 **80 与 443**。
+> 只改 firewalld 是不够的 —— 这是阿里云上最常见的"服务起来了但外网连不上"的原因。
+
+**Caddy 安装（替代第 8 步）**
+
+```bash
+# 方案 A：COPR 仓库（RHEL 系官方推荐）
+sudo dnf install -y dnf-plugins-core
+sudo dnf copr enable -y @caddy/caddy
+sudo dnf install -y caddy
+
+# 方案 B：COPR 不通（国内网络常见）→ 用官方静态二进制
+CADDY_VER=2.8.4
+curl -L -o /tmp/caddy.tar.gz \
+  "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VER}/caddy_${CADDY_VER}_linux_amd64.tar.gz"
+sudo tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
+sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/caddy   # 允许非 root 绑 80/443
+sudo useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy
+```
+
+方案 B 还要自己写一个 systemd 单元（Caddy 官方仓库里有现成的
+`caddy.service`，直接取来即可）：
+
+```ini
+[Unit]
+Description=Caddy
+After=network.target
+
+[Service]
+User=caddy
+Group=caddy
+ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**正文里其余步骤**（systemd 单元、Caddyfile、备份 timer、CLI 命令、核查清单）
+**与发行版无关**，照抄即可。
 
 ---
 
