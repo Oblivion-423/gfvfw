@@ -77,15 +77,58 @@ python3 --version                # 需要 3.10+
 
 ## 2. 把代码传到服务器
 
-项目**已纳入 git**（首个提交 `5b13440`，124 个文件）。所以直接用 `git clone`：
+代码已在私有仓库：**`https://github.com/Oblivion-423/gfvfw`**
 
 ```bash
-# 服务器上
 sudo mkdir -p /srv/gfvfw && sudo chown gfvfw:gfvfw /srv/gfvfw
-sudo -u gfvfw git clone <你的仓库地址> /srv/gfvfw
+sudo -u gfvfw git clone https://github.com/Oblivion-423/gfvfw /srv/gfvfw
 sudo chown -R gfvfw:gfvfw /srv/gfvfw
 ls /srv/gfvfw         # 应看到 gfvfw/ deploy/ tests/ requirements.txt README.md docs/
 ```
+
+### ⚠️ 私有仓库在无头服务器上怎么认证（**先做这一步，否则 clone 会卡在输密码**）
+
+GitHub 从 2021 年起**不接受账号密码**做 HTTPS 认证，`git clone` 会一直要用户名口令。
+两个办法，**推荐前者**：
+
+| 方案 | 怎么做 | 适用 |
+|---|---|---|
+| **只读部署密钥**（推荐） | 在服务器上生成一对 SSH key，把**公钥**加成仓库的 Deploy Key（只读） | 服务器只需 `git pull`，不需要推送权限 —— 只读正好 |
+| 个人访问令牌（PAT） | 生成 fine-grained PAT（只读 Contents），填进 `git clone https://<token>@github.com/...` | 图省事，但令牌会留在服务器的 remote 配置里 |
+
+部署密钥的完整步骤：
+
+```bash
+# 1) 服务器上：先给密钥一个**仓库目录之外**的家
+#    ⚠️ 不要把私钥放在 /srv/gfvfw 里面 —— 那在 git 工作区内，
+#       将来任何一次 git add -A 都可能把私钥提交进仓库。
+sudo install -d -m 700 -o gfvfw -g gfvfw /var/lib/gfvfw/.ssh
+
+# 2) 生成密钥（不给口令，否则 update.sh 会卡在交互）
+sudo -u gfvfw ssh-keygen -t ed25519 -C "gfvfw-server" \
+  -f /var/lib/gfvfw/.ssh/gfvfw_deploy -N ""
+
+# 3) 打印公钥，复制它
+sudo cat /var/lib/gfvfw/.ssh/gfvfw_deploy.pub
+
+# 4) 到 GitHub 仓库页面：Settings → Deploy keys → Add deploy key
+#    标题随意（如 gfvfw-vps），粘贴公钥，**不要**勾 "Allow write access"
+
+# 5) 告诉 git 用这把钥匙（只对这个仓库生效，不污染全局配置）
+sudo -u gfvfw -H bash -c 'cd /srv/gfvfw && \
+  git config core.sshCommand "ssh -i /var/lib/gfvfw/.ssh/gfvfw_deploy -o IdentitiesOnly=yes" && \
+  git remote set-url origin git@github.com:Oblivion-423/gfvfw.git'
+
+# 6) 先验证握手（首次会问 host key，答 yes）
+sudo -u gfvfw -H ssh -i /var/lib/gfvfw/.ssh/gfvfw_deploy -o IdentitiesOnly=yes \
+  -T git@github.com        # 期望：Hi Oblivion-423/gfvfw! You've successfully authenticated...
+```
+
+⚠️ 用**只读**部署密钥正好合适：服务器只需要 `git pull`，
+`update.sh` 的回滚靠本地 `git reset --hard`，都不需要推送权限。
+这样即使服务器被攻破，也改不了 GitHub 上的代码。
+
+**升级流程（§11）不用改**，`update.sh` 里的 `git pull --ff-only` 会自动用上这把钥匙。
 
 ✅ **`var/`（数据库 + 上传文件 + 备份）已被 `.gitignore` 排除**，
 所以 `git clone` / `git pull` **永远不会碰到服务器上的真实数据**。
