@@ -163,8 +163,10 @@ sudo useradd --system --create-home --shell /usr/sbin/nologin gfvfw
 sudo mkdir -p /srv/gfvfw /srv/gfvfw/var /srv/gfvfw/bms-data
 sudo chown -R gfvfw:gfvfw /srv/gfvfw
 
-# 密钥目录（只有 root 能读）
-sudo install -d -m 750 /etc/gfvfw
+# 密钥目录：**属组必须是 gfvfw**，否则 gfvfw 用户连"穿过"目录都不行
+# （实测：目录 root:root 750 时，即使里面文件给了 gfvfw 640，
+#   `sudo -u gfvfw -H bash -c '. /etc/gfvfw/env'` 仍报 Permission denied）
+sudo install -d -m 750 -o root -g gfvfw /etc/gfvfw
 ```
 
 安装运行依赖：
@@ -376,12 +378,12 @@ sudo -u gfvfw -H bash -c '
 
 ```bash
 sudo cp /srv/gfvfw/deploy/env.example /etc/gfvfw/env
-# ⚠️ 属主 root、组 gfvfw、权限 640（不是 600）——原因见下方警告
-sudo chown root:gfvfw /etc/gfvfw/env
-sudo chmod 640 /etc/gfvfw/env
+# ⚠️ 目录与文件的**属组都要是 gfvfw**，只改文件不够 —— 原因见下方警告
+sudo chown root:gfvfw /etc/gfvfw      && sudo chmod 750 /etc/gfvfw
+sudo chown root:gfvfw /etc/gfvfw/env  && sudo chmod 640 /etc/gfvfw/env
 ```
 
-> ⚠️ **为什么是 640 而不是 600**
+> ⚠️ **为什么是 640 + 目录属组 gfvfw，而不是 600 root:root**
 >
 > systemd 在**降权之前以 root 身份**读 `EnvironmentFile=`，所以服务本身
 > 600 也能跑。但**你手工跑 CLI 时是以 `gfvfw` 用户 source 这个文件的**：
@@ -394,7 +396,25 @@ sudo chmod 640 /etc/gfvfw/env
 > 这套默认值（由 `BASE_DIR` 推出的**绝对路径**）恰好也是 `/srv/gfvfw/var/`，
 > 所以**看起来一切正常** —— 实测就是这样，`create-admin` 照样成功。
 > 但只要有人日后在 env 里改了 `GFVFW_DATABASE_URL`，没读到配置的 CLI 就会
-> **静默创建/操作另一个库**。640 让服务账号能读，这类事故就不可能发生。
+> **静默创建/操作另一个库**。这类事故极难排查，所以把读取权给到服务账号。
+>
+> ⚠️ **要改两处，只改文件不够**：Unix 权限是"目录可穿过（x）+ 文件可读（r）"
+> 两级判定，`/etc/gfvfw` 若是 `750 root:root`，gfvfw 用户**连目录都进不去**，
+> 里面文件设成什么都不管用（这是实测踩到的第二个坑）：
+>
+> ```bash
+> sudo chown root:gfvfw /etc/gfvfw && sudo chmod 750 /etc/gfvfw
+> sudo chown root:gfvfw /etc/gfvfw/env && sudo chmod 640 /etc/gfvfw/env
+> ls -ld /etc/gfvfw /etc/gfvfw/env     # 期望 drwxr-x--- root gfvfw / -rw-r----- root gfvfw
+> ```
+>
+> **这不降低安全性**：服务进程本来就在环境里持有该密钥（systemd 读出来传给进程），
+> 所以服务账号能读这个文件没有增加暴露面。目录仍 750（其他用户进不去）、
+> 文件仍 640（只有 root 与 gfvfw 可读）。
+>
+> ⚠️ **不要**图省事写成
+> `sudo -u gfvfw env $(grep -v '^#' /etc/gfvfw/env | xargs) …` ——
+> 密钥会出现在 `ps` 的进程命令行里，机器上任何用户都能看到。
 
 ⚠️ **`env.example` 里只有 `GFVFW_SECRET_KEY` 一行需要改** ——
 其余默认值（`GFVFW_HTTPS_ONLY=true`、`GFVFW_BMS_INSTALL_PATH`、三个数据路径）
