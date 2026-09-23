@@ -89,11 +89,14 @@ def main() -> int:
     live_storage = ROOT / "var" / "storage"
     live_before = {p for p in live_storage.rglob("*") if p.is_file()}
 
-    src = sqlite3.connect(str(LIVE_DB))
-    try:
-        src.execute("VACUUM INTO ?", (str(snap),))
-    finally:
-        src.close()
+    # ⚠️ 与生产备份走同一条快照路径，但**必须**从 gfvfw.sqlite_snapshot 导入 ——
+    #    该模块刻意不导入 gfvfw.config；而 gfvfw.db 会带出 config，
+    #    config 在导入时就把 settings 绑到（尚未被环境变量改写的）**线上库**，
+    #    于是探针会去读写真实数据。见 gfvfw/sqlite_snapshot.py 的模块 docstring。
+    from gfvfw.sqlite_snapshot import snapshot_sqlite  # noqa: PLC0415
+    if snap.exists():
+        snap.unlink()
+    snapshot_sqlite(LIVE_DB, snap)
 
     # ⚠️ 必须在 import gfvfw.config 之前设好环境变量
     os.environ["GFVFW_DATABASE_URL"] = "sqlite+pysqlite:///%s" % snap.as_posix()
@@ -105,6 +108,10 @@ def main() -> int:
     from gfvfw import lbk_parser as LBP
     from gfvfw.security import hash_password
     from gfvfw.web.app import create_app
+
+    # ★ 安全闸：确认配置真的指向快照而不是线上库（上传会写库，尤其重要）
+    from gfvfw.sqlite_snapshot import assert_isolated_snapshot
+    assert_isolated_snapshot(snap)
 
     c = sqlite3.connect(str(snap))
     c.row_factory = sqlite3.Row

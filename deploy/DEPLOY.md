@@ -761,8 +761,18 @@ sudo -u gfvfw -H bash -c '
 '
 ```
 
-它会用 SQLite 的 `VACUUM INTO` 取**一致性快照**（WAL 模式下直接 `cp` 会得到撕裂的库），
-连同上传目录一起打成 `gfvfw-backup-<UTC 时间戳>.tar.gz`，并按保留天数清理旧档。
+它会取一份**一致性快照**（WAL 模式下直接 `cp` 会得到撕裂的库 ——
+已提交但还在 `-wal` 里的事务不在主文件里），连同上传目录一起打成
+`gfvfw-backup-<UTC 时间戳>.tar.gz`，并按保留天数清理旧档。
+
+> ⚠️ 快照用的是 Python 的 `sqlite3.Connection.backup()`（**在线备份 API**，
+> SQLite 3.6.11 起就有），**不是** `VACUUM INTO`。
+> 后者要 SQLite **3.27+**，而本项目的服务器（Alibaba Cloud Linux 3 / RHEL 8 系）
+> 系统 SQLite 是 **3.26.0** —— 曾经因此在服务器上报
+> `sqlite3.OperationalError: near "INTO": syntax error`，备份失败、更新中止。
+> 开发机是 Python 3.10 自带的 3.39，**本地测不出来**。
+> 所以这条约束由 `gfvfw.db.check_sqlite_feature_level()` 静态兜住，
+> 预检第 1 步会跑它。
 
 定时执行 —— 用 systemd timer：
 
@@ -1078,6 +1088,7 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | `git pull` 被拒绝（`local changes`） | 有人在服务器上直接改了代码 | **不该这样**（目录对服务只读）；`git -C /srv/gfvfw status` 看改了什么，用 `git checkout -- .` 丢弃后重跑 |
 | 改了 `gfvfw.service` / `Caddyfile` 不生效 | 它们**不在** `ReadWritePaths` 里，是系统文件 | 改 `/etc/systemd/system/gfvfw.service` 与 `/etc/caddy/Caddyfile`，然后 `systemctl daemon-reload` / `systemctl reload caddy` |
 | `update.sh` 第 1 步报 **`PermissionError: [Errno 13] Permission denied: '.env'`**（或任何**相对路径**的文件名） | **工作目录不对**。`sudo` 会保留调用者的 cwd，而 `/root` 是 0700 —— `sudo -u gfvfw` 的子进程连进都进不去，于是任何相对路径访问都变成 EACCES。根因是配置用相对路径找 `.env` | 已修两处：`gfvfw/config.py` 的 `env_file` 改成**绝对路径**（根治 —— 配置不该依赖 cwd），`update.sh` 开头 `cd "$APP_DIR"`（纵深防御）。拉到包含此修复的版本后即不再出现 |
+| 备份报 **`sqlite3.OperationalError: near "INTO": syntax error`** | 用了 `VACUUM INTO`，它要 SQLite **3.27+**，而 RHEL 8 系系统 SQLite 是 **3.26.0**。开发机（Windows + Python 3.10）自带 3.39，**本地测不出来** | 已改成 `sqlite3.Connection.backup()`（在线备份 API，3.6.11 起就有）。核对服务器实际版本：`/srv/gfvfw/.venv/bin/python -c "import sqlite3;print(sqlite3.sqlite_version)"` |
 
 ⚠️ **不要给服务加 `--workers N`**：SQLite 是单写者，多进程会写冲突。
 本项目所有缓存（剧场数据、解析状态）也都是按单进程设计的。

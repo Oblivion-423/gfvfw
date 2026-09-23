@@ -64,11 +64,23 @@ def main() -> int:
         os.environ["GFVFW_SITE_NAME"] = "矛隼虚拟飞行联队"
 
         # ---------------------------------------------------------------
-        print("\n[1] 可移植性（PORTABLE_TYPES 白名单）")
+        print("\n[1] 可移植性（类型白名单 + SQLite 特性等级）")
         # ---------------------------------------------------------------
-        from gfvfw.db import check_portability
+        from gfvfw.db import (
+            MIN_SQLITE_VERSION, check_portability, check_sqlite_feature_level,
+            sqlite_version,
+        )
         problems = check_portability()
         check("★ check_portability() 无告警", not problems, str(problems[:3]))
+
+        # ⚠️ 这条是补上去的教训：备份用 VACUUM INTO（SQLite 3.27+），
+        #    本地 3.39 一路正常，线上（RHEL 8 系）3.26 直接语法错误。
+        #    "开发机比服务器新"是这类故障唯一的成因，所以必须静态拦一道。
+        print("  本机 SQLite %s；声明的最低支持 %s"
+              % (sqlite_version(), MIN_SQLITE_VERSION))
+        feats = check_sqlite_feature_level()
+        check("★ 未使用高于最低支持版本的 SQLite 特性", not feats,
+              str(feats[:3]))
 
         print("\n[2] 空库建表 + 播种")
         from gfvfw.db import Base, SessionLocal, engine
@@ -244,7 +256,7 @@ def main() -> int:
                   rr.status_code == 404, "得到 %d" % rr.status_code)
 
         # ---------------------------------------------------------------
-        print("\n[6] 备份可用（VACUUM INTO + 打包）")
+        print("\n[6] 备份可用（一致性快照 + 打包）")
         # ---------------------------------------------------------------
         env = dict(os.environ)
         env["PYTHONIOENCODING"] = "utf-8"

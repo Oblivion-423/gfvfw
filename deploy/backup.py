@@ -6,8 +6,29 @@ GFVFW 备份：数据库 + 上传目录一起打包（需求 R9）。
 --------------------------------
 SQLite 跑在 WAL 模式下，直接复制 ``.sqlite3`` 会得到一个**撕裂的快照**：
 已经提交但还在 ``-wal`` 里的事务不在主文件里，而 ``-wal`` 又不一定同时被复制。
-本脚本用 ``VACUUM INTO`` 取一致性快照（SQLite 3.27+，Python 3.10 自带 ≥3.37），
-它在事务中生成一个完整、可直接打开的数据库副本，不需要停服务。
+一致性快照由 :func:`gfvfw.db.snapshot_sqlite` 负责（在线备份 API，
+不需要停服务）。
+
+⚠️ 这里曾经用 ``VACUUM INTO``，在服务器上直接失败
+------------------------------------------------
+``VACUUM INTO`` 需要 SQLite **3.27+**。开发机是 Python 3.10 自带的 3.37+，
+所以本地怎么测都正常；而线上是 Alibaba Cloud Linux 3 / RHEL 8 系，
+系统 SQLite 是 **3.26.0** ⟹
+
+    sqlite3.OperationalError: near "INTO": syntax error
+
+—— 备份失败、``update.sh`` 中止，而报错里完全没有"版本"两个字。
+现在统一走 ``Connection.backup()``（SQLite 3.6.11 起的在线备份 API），
+并且**只有这一条路径**，不做版本嗅探 —— 双路径意味着"本地测 A、线上跑 B"。
+
+⚠️ 不要为了"快照更小"改回 ``VACUUM INTO``
+------------------------------------------
+``VACUUM INTO`` 会顺带整理碎片，产物比本实现小一些（本实现是逐页复制，
+含空闲页）。这点体积差异**不值得**换回一个"取决于服务器 SQLite 版本"的
+实现 —— 而且一旦写成"新版本用 A、旧版本用 B"，本地永远测的是 A，
+线上永远跑的是 B，等于把这条教训重新埋回去。
+真要省体积，应该给备份包整体做压缩（``--no-compress`` 的反面），
+那是环境无关的。
 
 用法
 ----
@@ -43,6 +64,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gfvfw.config import settings  # noqa: E402
+from gfvfw.db import snapshot_sqlite, verify_snapshot  # noqa: E402
 
 
 def db_file_path() -> Path | None:
@@ -54,40 +76,16 @@ def db_file_path() -> Path | None:
 
 
 def snapshot_db(src: Path, dest: Path, *, verify: bool) -> int:
-    """用 ``VACUUM INTO`` 取一致性快照，返回字节数。
+    """取一致性快照，返回字节数。
 
-    ⚠️ ``VACUUM INTO`` 要求目标文件**不存在**；已存在会报错（这是好事，
-    避免悄悄覆盖上一份备份）。
+    实现全部委托给 :func:`gfvfw.db.snapshot_sqlite` —— 生产备份与本地探针
+    **必须走同一条路径**，否则"本地验证过"就说明不了线上能用。
     """
-    if not src.exists():
-        raise FileNotFoundError("数据库文件不存在：%s" % src)
-    if dest.exists():
-        raise FileExistsError("快照目标已存在：%s" % dest)
-
-    # 只读方式打开源库；VACUUM INTO 自己会处理 WAL 里的已提交事务
-    con = sqlite3.connect("file:%s?mode=ro" % src.as_posix(), uri=True)
-    try:
-        con.execute("VACUUM INTO ?", (str(dest),))
-    finally:
-        con.close()
-
+    size = snapshot_sqlite(src, dest)
     if verify:
-        # 单独打开快照做完整性检查 —— 备份不能用"文件存在"来证明有效
-        chk = sqlite3.connect(dest)
-        try:
-            row = chk.execute("PRAGMA integrity_check").fetchone()
-            status = row[0] if row else "?"
-            if status != "ok":
-                raise RuntimeError("快照完整性检查未通过：%s" % status)
-            # 顺带确认关键表在
-            tables = {r[0] for r in chk.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'")}
-            for t in ("members", "users", "sorties", "missions"):
-                if t not in tables:
-                    raise RuntimeError("快照缺少表：%s" % t)
-        finally:
-            chk.close()
-    return dest.stat().st_size
+        # 备份不能用"文件存在"来证明有效
+        verify_snapshot(dest)
+    return size
 
 
 def add_tree(tf: tarfile.TarFile, root: Path, arcname: str) -> tuple[int, int]:

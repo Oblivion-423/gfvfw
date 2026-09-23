@@ -26,6 +26,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# ⚠️⚠️ 只从 gfvfw.sqlite_snapshot 导入 —— 它**刻意不导入 gfvfw.config**。
+#    这里绝不能写 `from gfvfw.db import snapshot_sqlite`：
+#    gfvfw.db 会带出 config，而 config 在**导入时**就把 settings 绑到
+#    （尚未被环境变量改写的）**线上库**上，于是这个探针会去读写真实数据。
+#    真发生过：这样改过一次，探针的登录尝试打到线上库，
+#    把真实管理员账号连败 5 次锁掉了。
+from gfvfw.sqlite_snapshot import assert_isolated_snapshot, snapshot_sqlite  # noqa: E402
+
 LIVE_DB = ROOT / "var" / "gfvfw.sqlite3"
 LIVE_STORAGE = ROOT / "var" / "storage"
 PROBE_PW = "Probe-Only-Password-2026"
@@ -43,11 +51,14 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def snapshot(dest: Path) -> None:
-    src = sqlite3.connect(str(LIVE_DB))
-    try:
-        src.execute("VACUUM INTO ?", (str(dest),))
-    finally:
-        src.close()
+    """一致性快照 —— 与生产备份走同一条路径（见 gfvfw/db.py::snapshot_sqlite）。
+
+    ⚠️ 以前这里自己写 ``VACUUM INTO``，于是"本地探针能跑"证明不了线上备份能用
+       （服务器 SQLite 3.26 没有这个语法）。
+    """
+    if dest.exists():
+        dest.unlink()
+    snapshot_sqlite(LIVE_DB, dest)
 
 
 def main() -> int:
@@ -73,6 +84,10 @@ def main() -> int:
 
         from gfvfw.security import hash_password
         from gfvfw.web.app import create_app
+
+        # ★ 安全闸：确认配置真的指向快照而不是线上库。
+        #   必须在任何写操作/登录之前调用 —— 见 gfvfw/sqlite_snapshot.py。
+        assert_isolated_snapshot(snap)
 
         # 在快照里放一个已知密码的管理员
         c = sqlite3.connect(str(snap))

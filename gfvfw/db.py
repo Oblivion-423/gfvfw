@@ -9,15 +9,25 @@
 1. 使用带 ``postgresql`` extra 安装的 SQLAlchemy，启用跨方言类型校验；
 2. 定义了下方 :data:`PORTABLE_TYPES`，只允许可移植类型；
 3. 提供 :func:`check_portability` 在测试中校验模型未使用危险类型；
-4. SQLite 连接统一开启 ``WAL`` 与外键约束。
+4. SQLite 连接统一开启 ``WAL`` 与外键约束；
+5. 提供 :func:`snapshot_sqlite` —— **唯一**的一致性快照实现，
+   刻意只用"古老到哪儿都有"的 API（见该函数注释）。
+
+⚠️ 还有一条隐性可移植性约束：**服务端的 SQLite 可能比开发机老得多**。
+开发机是 Windows + Python 3.10（自带 SQLite 3.37+），而服务器是
+Alibaba Cloud Linux 3 / RHEL 8 系，系统 SQLite 是 **3.26.0**。
+写 SQL 时不要用"看起来挺常见"的新特性，见 :data:`SQLITE_VERSION_GATED_SQL`
+与 :func:`check_sqlite_feature_level`。
 """
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from pathlib import Path
+from typing import Any, Iterator, Optional, Union
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Integer, String, Text, Uuid
 from sqlalchemy import create_engine, event
@@ -149,3 +159,22 @@ def check_portability(base: type = Base) -> list[str]:
                     % (cls.__name__, col.name)
                 )
     return problems
+
+
+# --------------------------------------------------------------------------
+# SQLite 底层工具（一致性快照 / 版本特性自检）
+# --------------------------------------------------------------------------
+# ⚠️ 真正的实现放在 :mod:gfvfw.sqlite_snapshot —— 那个模块**刻意不导入
+#    config**，所以探针脚本可以在设置环境变量之前安全地导入它。
+#    这里重新导出只是为了既有代码（deploy/backup.py、scripts/preflight.py、
+#    tests/*）继续 `from gfvfw.db import …` 不必改。
+#    **探针脚本请直接从 gfvfw.sqlite_snapshot 导入**，原因见该模块的 docstring。
+from .sqlite_snapshot import (  # noqa: E402,F401
+    MIN_SQLITE_VERSION,
+    SQLITE_VERSION_GATED_SQL,
+    assert_isolated_snapshot,
+    check_sqlite_feature_level,
+    snapshot_sqlite,
+    sqlite_version,
+    verify_snapshot,
+)

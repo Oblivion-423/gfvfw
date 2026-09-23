@@ -11,6 +11,7 @@ Web 层自校验：骨架、认证、权限、成员名册 CRUD。
 from __future__ import annotations
 
 import os
+import sqlite3
 import re
 import sys
 import tempfile
@@ -298,6 +299,125 @@ def test_config_is_cwd_independent() -> None:
                       "bms=%r" % other_vals["bms"])
             # 顺带确认 .env 确实是被读了的（路径一致即可，值对不对由上面管）
             check(".env 被解析为绝对路径", Path(other_vals["env_file"]).is_absolute())
+
+
+def test_backup_snapshot_is_wal_consistent() -> None:
+    """备份快照必须是**一致性**的 —— 也就是"WAL 里已提交的数据也在里面"。
+
+    这条测试盯的是备份唯一致命的失败模式：库跑在 WAL 模式下，
+    直接 ``cp`` ``.sqlite3`` 会拿到**撕裂的快照** —— 已经提交但还在
+    ``-wal`` 里的事务不在主文件里。这种备份"文件存在、能打开、大小正常"，
+    但恢复时少数据 —— 平时完全看不出来，只在真出事那天才发现。
+
+    做法：造一个 WAL 库 → 提交一行（此时它只在 ``-wal`` 里）→
+    **不做 checkpoint** 直接快照 → 打开快照，那一行必须在。
+
+    ⚠️ 顺带守住"别再用版本受限的 API"：实现里若改回 ``VACUUM INTO``，
+    在服务器（SQLite 3.26）上会直接语法错误 —— 这里改用行为断言，
+    版本问题由 ``check_sqlite_feature_level()`` 静态兜住。
+    """
+    from gfvfw.db import snapshot_sqlite, verify_snapshot
+
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        tdp = Path(td)
+        live = tdp / "live.sqlite3"
+        snap = tdp / "snap.sqlite3"
+
+        con = sqlite3.connect(str(live))
+        try:
+            con.execute("PRAGMA journal_mode=WAL")
+            con.execute("CREATE TABLE members (id TEXT PRIMARY KEY, callsign TEXT)")
+            con.execute("CREATE TABLE users (id TEXT PRIMARY KEY)")
+            con.execute("CREATE TABLE sorties (id TEXT PRIMARY KEY)")
+            con.execute("CREATE TABLE missions (id TEXT PRIMARY KEY)")
+            con.execute("INSERT INTO members VALUES ('m1', 'Viper')")
+            con.commit()
+
+            # 关键前提：数据确实还在 -wal 里（没被 checkpoint 进主文件）
+            wal = Path(str(live) + "-wal")
+            check("前置条件：WAL 文件存在且非空（数据尚未落主文件）",
+                  wal.is_file() and wal.stat().st_size > 0,
+                  "wal=%s size=%s" % (wal.is_file(),
+                                      wal.stat().st_size if wal.is_file() else "-"))
+
+            # 快照时**不能**先关掉连接再 checkpoint —— 那会把数据挪进主文件，
+            # 于是"撕裂"这个前提就没了，测试也就测不到东西了。
+            size = snapshot_sqlite(live, snap)
+            check("快照产出非空文件", size > 0, "%d 字节" % size)
+
+            chk = sqlite3.connect(str(snap))
+            try:
+                # ⚠️ 包一层 try：如果实现退化成"朴素复制文件"，快照里连
+                #    建表语句都没有，直接读会抛 OperationalError。
+                #    让它是**一条失败的断言**而不是让整个套件崩掉 ——
+                #    崩掉的输出只会显示堆栈，看不出"就是这里错了"。
+                try:
+                    n = chk.execute("SELECT count(*) FROM members").fetchone()[0]
+                    row = chk.execute(
+                        "SELECT callsign FROM members WHERE id='m1'").fetchone()
+                    err = None
+                except sqlite3.Error as exc:
+                    n, row, err = -1, None, exc
+            finally:
+                chk.close()
+            check("★ 快照里带着 WAL 中已提交的那一行（没被 cp 撕裂）",
+                  err is None and n == 1 and row is not None and row[0] == "Viper",
+                  "count=%s row=%s err=%s" % (n, row, err))
+        finally:
+            con.close()
+
+        # verify 路径：完整性检查 + 关键表存在
+        verify_snapshot(snap)
+        check("verify 路径不抛异常（integrity_check + 关键表）", True)
+
+        # 已存在的目标必须报错，绝不悄悄覆盖上一份备份
+        try:
+            snapshot_sqlite(live, snap)
+            check("★ 目标已存在时拒绝覆盖", False, "居然没报错")
+        except FileExistsError:
+            check("★ 目标已存在时拒绝覆盖", True)
+        except Exception as exc:                          # noqa: BLE001
+            check("★ 目标已存在时拒绝覆盖", False,
+                  "抛的是 %s 而不是 FileExistsError" % type(exc).__name__)
+
+
+def test_snapshot_module_has_no_config_dependency() -> None:
+    """``gfvfw.sqlite_snapshot`` 导入时**绝不能**带出 ``gfvfw.config``。
+
+    这条是安全约束，不是风格偏好。``gfvfw.config`` 在**导入那一刻**就构造
+    ``settings``，也就是那一刻决定"连哪个数据库"。而探针脚本的写法是
+    "先设 ``GFVFW_DATABASE_URL`` 指向快照，再导入应用" —— 顺序一旦反了，
+    ``settings`` 就绑定到**线上库**，探针会去读写真实数据。
+
+    ⚠️ 真发生过：把 ``snapshot_sqlite`` 放进 ``gfvfw/db.py`` 后，
+    探针顶部的 ``from gfvfw.db import snapshot_sqlite`` 连带导入 config，
+    于是探针的登录尝试打到线上库，把**真实管理员账号连败 5 次锁掉**。
+
+    所以这里用子进程直接验证：导入该模块后，``sys.modules`` 里不能出现
+    ``gfvfw.config``。任何"顺手把 settings 引进来"的改动都会立刻变红。
+    """
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, %r)\n"
+        "import gfvfw.sqlite_snapshot\n"
+        "leaked = [m for m in sys.modules if m == 'gfvfw.config']\n"
+        "print('LEAKED' if leaked else 'CLEAN')\n"
+    ) % str(ROOT)
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT),
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
+    out = (r.stdout or "").strip().splitlines()
+    check("★ gfvfw.sqlite_snapshot 导入时不带出 gfvfw.config",
+          r.returncode == 0 and out and out[-1] == "CLEAN",
+          "returncode=%s out=%r err=%s" % (r.returncode, out, (r.stderr or "")[-300:]))
+
+    # 顺带确认它导出的东西真的在（免得"清空模块"也能通过上面那条）
+    from gfvfw.sqlite_snapshot import (      # noqa: F401
+        assert_isolated_snapshot, snapshot_sqlite, verify_snapshot,
+    )
+    check("gfvfw.sqlite_snapshot 导出快照与安全闸", True)
 
 
 def _build_plain_app(tmpdir: Path):
@@ -596,6 +716,8 @@ def main() -> int:
     test_schema_drift_is_repaired()
     test_deployment_security()
     test_config_is_cwd_independent()
+    test_backup_snapshot_is_wal_consistent()
+    test_snapshot_module_has_no_config_dependency()
 
     print("\n" + "=" * 70)
     print("断言总数 %d，失败 %d" % (CHECKS[0], len(FAILURES)))

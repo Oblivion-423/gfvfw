@@ -33,12 +33,12 @@
 | 实际部署到 VPS | ⬜ 待你在服务器上执行 |
 | Alembic 迁移 | ⬜ 未接（现靠 `schema_sync` 自动补列） |
 
-**测试合计 1115 个断言 / 12 个套件，0 失败**
+**测试合计 1122 个断言 / 12 个套件，0 失败**
 （`.venv\Scripts\python.exe -m pytest -q` → 12 passed）
 > 里面 **1 组会跳过**：战役管理的「与 `campaign_state.json` 对拍」需要真实存档，
 > 设 `GFVFW_TEST_CAM` 与 `GFVFW_TEST_STATE_JSON` 指向配套的 `.cam` 与 CamReader 输出即可跑满。
-> 12 个套件相加正好 1115
-> （65+36+88+105+88+61+82+157+67+58+132+176），与 `pytest` 一致。
+> 12 个套件相加正好 1122
+> （65+36+95+105+88+61+82+157+67+58+132+176），与 `pytest` 一致。
 
 ---
 
@@ -519,7 +519,7 @@ Internet ──HTTPS(443)──▶ [Caddy] ──127.0.0.1:8000──▶ [GFVFW 
 | `Caddyfile` | 反向代理。**关键一行**：`header_up X-Forwarded-For {http.request.remote.host}` —— 把该头**覆盖**为真实对端地址。实测（真机）伪造值进不来，所以审计 IP 不可伪造；但"到底是这行生效还是 Caddy 自己就丢了不可信同名头"当时没判定，所以那行**不能删**（它是把隐式保证变成显式保证）|
 | `gfvfw.service` | systemd 单元。只监听回环、`--proxy-headers`、**不加 `--workers`**、`ProtectSystem=strict`（代码目录对服务只读） |
 | `env.example` | 生产环境变量模板（`GFVFW_SECRET_KEY` / `GFVFW_HTTPS_ONLY` / `GFVFW_BMS_INSTALL_PATH` …） |
-| `backup.py` | 备份：`VACUUM INTO` 一致性快照 + 上传目录打包 + 保留策略；`--verify` 会做 `integrity_check` |
+| `backup.py` | 备份：一致性快照（`Connection.backup()` 在线备份 API，**不用 `VACUUM INTO`**）+ 上传目录打包 + 保留策略；`--verify` 会做 `integrity_check` |
 | `update.sh` | **一键升级**：备份 → `git pull --ff-only` → 装依赖 → 重启 → 健康检查；健康检查失败**自动回滚代码** |
 
 日常升级就一条命令（`--dry-run` 可先看不做）：
@@ -591,6 +591,7 @@ python -m venv .venv
 gfvfw/
   config.py           全局配置（环境变量前缀 GFVFW_）
   db.py               引擎/会话 + 可移植类型白名单 + check_portability()
+                      + SQLite 特性等级检查 + 一致性快照 snapshot_sqlite()
   acmi_parser.py      ACMI(Tacview) 解析器 —— 纯函数，无数据库依赖
   security.py         密码哈希(argon2id) / CSRF / 登录锁定 / 隐私哈希
   permissions.py      权限点定义 + 5 个固定角色（只判权限点，不判角色名）
@@ -696,7 +697,10 @@ tests/
   web_selfcheck.py           骨架/认证/权限/名册 + schema 漂移自愈
                            + 部署安全（Secure Cookie / XFF 信任）
                            + 游客档：列表页可看、详情 403、写操作 UI 消失
-                           + 首页队标引用必须真的能取到 PNG + **配置不依赖工作目录**（88 断言）
+                           + 首页队标引用必须真的能取到 PNG
+                           + **配置不依赖工作目录**（子进程换目录导入，配置必须一致）
+                           + **备份快照必须带 WAL 里已提交的数据**
+                           + **`sqlite_snapshot` 导入时不得带出 config**（95 断言）
   acmi_web_selfcheck.py      ACMI 工作台：入口/权限/上传/认领/归并/自动归入战役
                              + 开放重定向防护 + 日志时长只算一次
                              + 三个时长同时标注（105 断言）
@@ -737,7 +741,7 @@ deploy/                上线产物（VPS 部署用，不参与本地开发）
   Caddyfile            反向代理（含 X-Forwarded-For 覆盖，必须保留）
   gfvfw.service        systemd 单元（单进程、只监听回环、目录加固）
   env.example          生产环境变量模板（含三个必开开关的说明）
-  backup.py            备份：SQLite VACUUM INTO 一致性快照 + 上传目录 + 保留策略
+  backup.py            备份：SQLite 一致性快照（在线备份 API）+ 上传目录 + 保留策略
 ```
 
 ---
@@ -747,6 +751,7 @@ deploy/                上线产物（VPS 部署用，不参与本地开发）
 | 决策 | 结论 | 依据 |
 |---|---|---|
 | 数据库 | SQLite(WAL)，但**强制可移植**至 PostgreSQL | `db.check_portability()` 在测试中拦截 SQLite 专有类型 |
+| **最低 SQLite 版本** | **3.26.0**（服务器实际版本），另有 `db.check_sqlite_feature_level()` 静态拦截 | ⚠️ 开发机是 Windows + Python 3.10 自带的 **3.39**，服务器是 Alibaba Cloud Linux 3 / RHEL 8 系的 **3.26** —— **本地测不出任何版本差异**。备份曾用 `VACUUM INTO`（要 3.27），线上直接 `near "INTO": syntax error`：备份失败、更新中止，报错里还完全没有"版本"二字。现在备份走 `Connection.backup()`（3.6.11 起的在线备份 API），且**只有这一条路径**（双路径＝本地测 A、线上跑 B，正是这个坑的成因） |
 | ACMI 容器 | `.zip.acmi` 实为 **ZIP 内含 `acmi.txt`** | 实测 193 份 |
 | 人驾判定 | `Pilot=` 存在 **∧** 名字命中联队名册 | **禁止按机型过滤**（同一飞行员驾驶多国多型） |
 | 起降判定 | 起飞=名字出现；降落=文件结束时速度为零 | 联队口径，实测分离度极大（0~4 节 vs 168~358 节） |
