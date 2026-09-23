@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 MODULES = [
-    "home", "auth", "apply", "applications", "account", "logbook", "members",
-    "acmi", "missions", "sorties", "campaigns", "theater", "stats",
+    "home", "auth", "apply", "applications", "enroll", "account", "logbook",
+    "members", "acmi", "missions", "sorties", "campaigns", "theater", "stats",
     "placeholders",
 ]
 # ⚠️ 两种用法都要认：

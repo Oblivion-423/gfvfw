@@ -35,6 +35,10 @@ from .permissions import ROLE_DEFINITIONS
 from .security import hash_password, new_token, password_problem
 from .services.audit import record_audit
 from .services.bootstrap import ensure_schema, seed
+from .services.naming import (
+    callsign_owner, callsign_shadows_username, username_owner,
+    username_shadows_callsign,
+)
 
 log = logging.getLogger("gfvfw.cli")
 
@@ -127,9 +131,28 @@ def cmd_create_member(args) -> None:
     _setup()
     with SessionLocal() as db:
         seed(db)
-        if db.scalar(select(Member).where(Member.callsign == args.callsign)):
-            raise SystemExit("呼号已存在：%s" % args.callsign)
-        member = Member(callsign=args.callsign, status=args.status)
+        # ⚠️ 这里的每一道校验都必须在 `db.add()` **之前**给出**可读的**中文错误。
+        #    以前只查了呼号，用户名撞车会一路走到 commit，然后甩出一整段
+        #    `sqlalchemy.exc.IntegrityError: UNIQUE constraint failed: users.username`
+        #    加 SQL 语句 —— 对运维命令来说这是不可接受的输出。
+        #    （数据是安全的：事务整体回滚，不会留下"半个成员"。）
+        problem = callsign_owner(db, args.callsign)
+        if problem:
+            raise SystemExit(problem)
+        if args.username:
+            problem = username_owner(db, args.username)
+            if problem:
+                raise SystemExit(problem)
+            # 跨命名空间：呼号与登录名同名会让人分不清谁是谁
+            problem = callsign_shadows_username(
+                db, args.callsign, ignore_username=args.username)
+            if problem:
+                raise SystemExit(problem)
+            problem = username_shadows_callsign(db, args.username)
+            if problem:
+                raise SystemExit(problem)
+
+        member = Member(callsign=args.callsign.strip(), status=args.status)
         db.add(member)
         db.flush()
         if args.username:
@@ -137,12 +160,15 @@ def cmd_create_member(args) -> None:
             problem = password_problem(password)
             if problem:
                 raise SystemExit(problem)
-            db.add(User(username=args.username,
+            db.add(User(username=args.username.strip(),
                         password_hash=hash_password(password),
                         status="active", member_id=member.id))
             _assign_role(db, member, args.role)
         db.commit()
-        print("已创建成员：%s" % args.callsign)
+        print("已创建成员：%s" % member.callsign)
+        if args.username:
+            print("  登录名 ：%s（已是队员，可直接登录）" % args.username.strip())
+            print("  角色   ：%s" % args.role)
 
 
 def cmd_list_members(args) -> None:

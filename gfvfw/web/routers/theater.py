@@ -240,9 +240,31 @@ async def upload_submit(request: Request,
     if len(data) > settings.max_cam_bytes:
         raise HTTPException(status_code=413, detail="存档文件过大")
 
-    tmpdir = Path(tempfile.mkdtemp(prefix="gfvfw-cam-"))
-    tmp = tmpdir / Path(name).name
-    tmp.write_bytes(data)
+    def fail(message: str, status: int = 400):
+        """把失败渲染回上传页（带上当前配置，便于自助排查）。"""
+        return render(request, "theater/upload.html", {
+            "error": message,
+            "campaigns": list(db.scalars(select(Campaign).where(
+                Campaign.deleted_at.is_(None)))),
+            "bms_path": settings.bms_install_path,
+            "max_mb": settings.max_cam_bytes // (1024 * 1024),
+        }, status_code=status)
+
+    # ⚠️ 临时文件的创建与写入**也要**包起来。
+    #    它们在原来的 try 之外，而这是最典型的"只在服务器上炸"的操作：
+    #    服务跑在 systemd 沙箱里（ProtectSystem=strict / PrivateTmp），
+    #    TMPDIR 不可写、磁盘满了、配额用尽 —— 任何一种都会抛出 OSError，
+    #    结果是用户看到光秃秃的 500，而真正的原因（写不进 /tmp）一个字都没露。
+    try:
+        tmpdir = Path(tempfile.mkdtemp(prefix="gfvfw-cam-"))
+        tmp = tmpdir / Path(name).name
+        tmp.write_bytes(data)
+    except OSError as exc:
+        log.warning("战役存档临时文件写入失败：%s", exc)
+        return fail("服务器无法写入临时文件（%s）。"
+                    "请检查磁盘空间与临时目录权限，或把这个错误告诉管理员。"
+                    % exc, status=500)
+
     try:
         svc_ = svc.CampaignService()
         result = svc_.ingest(db, tmp, original_filename=Path(name).name,
@@ -250,22 +272,10 @@ async def upload_submit(request: Request,
                             campaign_id=campaign_id or None)
     except FileNotFoundError as exc:
         # 没配 BMS 安装目录 —— 这是部署问题，给出可执行的提示
-        return render(request, "theater/upload.html", {
-            "error": str(exc),
-            "campaigns": list(db.scalars(select(Campaign).where(
-                Campaign.deleted_at.is_(None)))),
-            "bms_path": settings.bms_install_path,
-            "max_mb": settings.max_cam_bytes // (1024 * 1024),
-        }, status_code=400)
+        return fail(str(exc))
     except Exception as exc:  # noqa: BLE001
         log.warning("战役存档上报失败：%s", exc)
-        return render(request, "theater/upload.html", {
-            "error": "解析失败：%s" % exc,
-            "campaigns": list(db.scalars(select(Campaign).where(
-                Campaign.deleted_at.is_(None)))),
-            "bms_path": settings.bms_install_path,
-            "max_mb": settings.max_cam_bytes // (1024 * 1024),
-        }, status_code=400)
+        return fail("解析失败：%s" % exc)
     finally:
         try:
             tmp.unlink(missing_ok=True)
@@ -273,14 +283,26 @@ async def upload_submit(request: Request,
         except OSError:
             pass
 
-    record_audit(db, actor_user_id=principal.user.id if principal.user else None,
-                 action="campaign.upload", target_table="campaign_saves",
-                 target_id=result.save.id,
-                 after={"file": name, "duplicate": result.duplicate,
-                        "status": result.save.parse_status,
-                        "objective_changes": result.objective_changes},
-                 reason="上报 BMS 战役存档", request=request)
-    db.commit()
+    # ⚠️ 审计与提交也在原来的 try 之外。走到这里说明解析已经成功、
+    #    文件已经归档到磁盘 —— 此时再抛 500，用户看到的是"上传失败"，
+    #    但磁盘上其实多了一个文件、库里可能已经多了一条存档记录。
+    #    所以这里失败要**如实说出这种半成品状态**，而不是留给用户去猜。
+    try:
+        record_audit(db, actor_user_id=principal.user.id if principal.user else None,
+                     action="campaign.upload", target_table="campaign_saves",
+                     target_id=result.save.id,
+                     after={"file": name, "duplicate": result.duplicate,
+                            "status": result.save.parse_status,
+                            "objective_changes": result.objective_changes},
+                     reason="上报 BMS 战役存档", request=request)
+        db.commit()
+    except Exception as exc:                            # noqa: BLE001
+        db.rollback()
+        log.exception("战役存档已解析但入库失败 file=%s：%s", name, exc)
+        return fail("存档已解析，但写入数据库失败：%s。"
+                    "原始文件已归档到 storage 目录，%s"
+                    % (exc, "可能已产生一条未完成的存档记录，请到战役页核对。"),
+                    status=500)
     if result.save.campaign_id:
         return RedirectResponse(
             "/theater/%s?saved=1" % result.save.campaign_id, status_code=303)

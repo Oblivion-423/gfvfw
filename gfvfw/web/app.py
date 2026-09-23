@@ -19,6 +19,7 @@ Starlette 中间件是**后进先出**（后加的靠外）。此处：
 from __future__ import annotations
 
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -34,7 +35,7 @@ from .deps import (
     LoginRequired, MemberRequired, PermissionDenied, load_principal,
 )
 from .routers import (
-    account, acmi, applications, apply, auth, campaigns, home, logbook,
+    account, acmi, applications, apply, auth, campaigns, enroll, home, logbook,
     members, missions, placeholders, sorties, stats, theater,
 )
 from .templating import STATIC_DIR, render
@@ -126,6 +127,35 @@ def create_app() -> FastAPI:
             "code": 404, "message": "页面或记录不存在。",
         }, status_code=404)
 
+    @app.exception_handler(Exception)
+    async def _unhandled(request: Request, exc: Exception):
+        """兜底：未捕获异常 → 记全量堆栈 + 给用户一个**可回报的编号**。
+
+        ⚠️ 加这个处理器的直接动机是一次真实故障：线上点"上传 .cam"得到
+        光秃秃的 **Internal Server Error**，而使用者手上**没有任何可提供的信息**
+        —— 不知道是哪个请求、该怎么描述、去哪儿看。于是排查只能靠猜。
+
+        现在：
+        * 服务端 `log.exception` 打出完整堆栈，**并带同一个编号**，
+          所以 `journalctl -u gfvfw | grep <编号>` 一条就能定位；
+        * 用户看到编号，可以直接把"编号 + 当时在做什么"告诉管理员。
+
+        ⚠️ 编号只是**关联用**，不是安全边界 —— 它不泄露堆栈内容，
+        页面上也不显示异常文本（异常里可能有文件路径等信息）。
+
+        ⚠️ Starlette 的 `ServerErrorMiddleware` 在调用本处理器后仍会
+        重新抛出异常，所以 TestClient(raise_server_exceptions=True) 的
+        行为不变（测试里该炸的还是炸）。
+        """
+        error_id = uuid.uuid4().hex[:8]
+        log.exception("未处理的服务器错误 #%s  %s %s",
+                      error_id, request.method, request.url.path)
+        return render(request, "error.html", {
+            "code": 500,
+            "error_id": error_id,
+            "message": "服务器内部错误 —— 这多半是个 Bug，不是你操作错了。",
+        }, status_code=500)
+
     # ---- 路由 ----
     # ⚠️ 顺序：具体前缀在前，避免被更宽泛的路径抢占。
     app.include_router(home.router)
@@ -134,6 +164,9 @@ def create_app() -> FastAPI:
     # 否则 /applications 可能被 /members/{id} 之类的宽泛路径抢走。
     app.include_router(apply.router)
     app.include_router(applications.router)
+    # 隐藏的「直接开队员」页（/enroll）—— 不在导航里，靠 require(application.review)
+    # 把门。放在 members 之前，免得 /enroll 被更宽泛的路径抢走。
+    app.include_router(enroll.router)
     app.include_router(account.router)
     app.include_router(logbook.router)
     app.include_router(members.router)

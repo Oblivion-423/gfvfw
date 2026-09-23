@@ -7,7 +7,26 @@
     <h1 style="font-size:34px;margin-bottom:6px">{{ code }}</h1>
     <p class="muted" style="margin:0 0 18px">{{ message }}</p>
 
-    {% if member_required %}
+    {% if error_id %}
+      {# 500 兜底页：给出**可回报的编号**，并告诉使用者去哪儿看详情。
+         编号只是关联用（服务端日志里带同一个编号），不含任何异常内容。 #}
+      <div class="panel" style="text-align:left;margin:0 0 14px">
+        <p class="small" style="margin:0 0 8px">
+          <strong>错误编号：</strong>
+          <code style="font-size:15px">{{ error_id }}</code>
+        </p>
+        <p class="small muted" style="margin:0">
+          请把<strong>这个编号</strong>和你<strong>当时在做什么</strong>
+          （点了哪个页面、上传了什么文件）告诉管理员，就能直接定位到日志。
+          <br>管理员查日志：
+          <code>journalctl -u gfvfw | grep {{ error_id }}</code>
+        </p>
+      </div>
+      <div class="actions" style="justify-content:center">
+        <a class="btn ghost" href="{{ current_path }}">重试一次</a>
+        <a class="btn ghost" href="/">返回首页</a>
+      </div>
+    {% elif member_required %}
       {# ⚠️ 游客已登录，把他重定向到登录页会造成「点→回登录→再点」的死循环，
          所以这里明确告诉他差的是"被提升为队员"这一步，
          并且老实列出他现在**能**看什么 —— 否则他会以为整个系统都是锁的。 #}

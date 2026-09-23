@@ -46,6 +46,9 @@ from ...security import (
     SESSION_USER_KEY, hash_password, password_problem, verify_csrf,
 )
 from ...services.audit import record_audit
+from ...services.naming import (
+    callsign_owner, username_owner, username_shadows_callsign,
+)
 from ..deps import Principal, get_db, get_principal, require_login
 from ..templating import render
 
@@ -100,16 +103,14 @@ def _recent_registrations(db: Session, ip_hash: str) -> int:
 
 
 def _callsign_taken(db: Session, callsign: str) -> bool:
-    """呼号是否已被占用（名册成员或未撤销的申请）。"""
-    hit = db.scalar(
-        select(Member.id).where(func.lower(Member.callsign) == callsign.lower(),
-                                Member.deleted_at.is_(None)).limit(1))
-    if hit:
-        return True
-    return db.scalar(
-        select(Application.id)
-        .where(func.lower(Application.desired_callsign) == callsign.lower(),
-               Application.status.notin_(("rejected",))).limit(1)) is not None
+    """呼号是否已被占用（名册成员或未撤销的申请）。
+
+    ⚠️ 实现统一在 :mod:`gfvfw.services.naming` —— 别在这里再写一份。
+    四个入口（注册 / 名册新建 / 隐藏的直开页 / CLI）共用同一套判定，
+    否则迟早出现"某个入口放过了"的不一致。
+    """
+    from ...services.naming import callsign_owner
+    return callsign_owner(db, callsign) is not None
 
 
 # --------------------------------------------------------------------------
@@ -181,9 +182,19 @@ def register_submit(request: Request,
     if email and ("@" not in email or len(email) > 254):
         return fail("邮箱格式看起来不对（也可以留空）。")
 
-    if db.scalar(select(User.id).where(
-            func.lower(User.username) == username.lower()).limit(1)):
+    if username_owner(db, username) is not None:
         return fail("这个用户名已经被占用了，换一个吧。")
+
+    # ★ 用户名不得与名册呼号相同。
+    #
+    # 这堵的是"游客看起来像现有成员"的漏洞：游客在界面上的显示名会回落成
+    # 用户名（deps.Principal.display_name），所以一个用户名恰好等于
+    # 某个成员呼号的游客，在名册与审批页里看起来就是那位成员。
+    # 提升时的呼号校验会拦住他（不会真出现两个同名成员），但"看起来像"
+    # 已经够让管理员看错人了。
+    shadow = username_shadows_callsign(db, username)
+    if shadow:
+        return fail(shadow)
 
     ip_hash = _ip_hash(request)
     if _recent_registrations(db, ip_hash) >= MAX_REGISTRATIONS_PER_IP_PER_DAY:

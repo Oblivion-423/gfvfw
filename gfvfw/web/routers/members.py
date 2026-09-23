@@ -32,6 +32,7 @@ from ...permissions import (
 )
 from ...services import logbook as LB
 from ...services.audit import record_audit
+from ...services.naming import callsign_owner, callsign_shadows_username
 from ..deps import (
     Principal, get_db, require, require_login, require_member,
 )
@@ -297,9 +298,19 @@ def member_create(request: Request,
     if len(callsign) > 64:
         return fail("呼号过长（上限 64 字符）。")
 
-    exists = db.scalar(select(Member).where(Member.callsign == callsign))
-    if exists is not None:
-        return fail("呼号「%s」已被使用，呼号必须唯一。" % callsign)
+    # 呼号唯一 —— 走公共服务（不区分大小写、排除已软删、也看未撤销的申请）。
+    # ⚠️ 以前这里是 `Member.callsign == callsign`（**区分大小写**），
+    #    于是 "viper" 能绕过 "Viper" 的唯一性，而 ACMI 归并是按呼号认人的。
+    problem = callsign_owner(db, callsign)
+    if problem:
+        return fail(problem + "。")
+
+    # ★ 呼号也不得与某个已有**登录名**相同（跨命名空间）。
+    #    漏掉这一条的话：先有人注册了用户名 "Viper"（游客），你再建名册成员
+    #    "Viper" —— 那位游客的显示名回落成用户名，于是名册里看起来有两个 Viper。
+    shadow = callsign_shadows_username(db, callsign)
+    if shadow:
+        return fail(shadow + "。请先把那个账号改名，或换一个呼号。")
 
     if status not in STATUS_LABELS:
         return fail("状态取值不合法。")

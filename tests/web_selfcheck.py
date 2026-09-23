@@ -579,7 +579,18 @@ def main() -> int:
                     "csrf_token": token,
                 })
                 check("重复呼号被拒", r.status_code == 400, "得到 %d" % r.status_code)
-                check("重复呼号给出提示", "已被使用" in r.text)
+                # ⚠️ 断言文案而不是"某个模糊词"：这句来自 services/naming.py，
+                #    要改文案就一起改测试，别让它悄悄变回含糊的提示。
+                check("重复呼号给出可读提示（指出是哪个成员占了）",
+                      "呼号「Viper」" in r.text and "已在名册里" in r.text,
+                      r.text[:200])
+                # 大小写不同也算重名 —— ACMI 归并是按呼号认人的
+                r = client.post("/members/new", data={
+                    "callsign": "vIpEr", "status": "active",
+                    "visibility": "public", "csrf_token": token,
+                })
+                check("★ 呼号唯一判定不区分大小写", r.status_code == 400,
+                      "得到 %d" % r.status_code)
 
                 # 编辑
                 r = client.get("/members/%s/edit" % new_id)

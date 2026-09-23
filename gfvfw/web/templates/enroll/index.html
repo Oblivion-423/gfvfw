@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block title %}直接开队员账号 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+{# ⚠️ 本页**不在任何导航里** —— 只能靠地址进入。这不是安全措施（地址就在源码里），
+   真正的防线是路由上的 require(application.review)。也不要把它加进菜单。 #}
+<div class="page-head">
+  <div>
+    <h1>直接开队员账号</h1>
+    <div class="sub">
+      跳过「注册 → 申请」，一次建好<strong>名册成员 + 登录账号 + member 角色</strong>，
+      建完<strong>立刻就是队员</strong>。
+    </div>
+  </div>
+  <div>
+    <a class="btn ghost" href="/members">成员名册</a>
+    <a class="btn ghost" href="/applications">入队审批</a>
+  </div>
+</div>
+
+<div class="flash info">
+  <strong>这一页不在导航里</strong>，只有知道地址 <code>/enroll</code> 的人能打开；
+  而且需要 <code>application.review</code> 权限（指挥 / owner）。
+  <br><span class="muted small">
+    正常入队请走 <a href="/applications">入队审批</a> —— 那一页有申请内容可看，
+    能把关。本页只适合"线下已经确认过身份"或"名册里有号没账号"的情况。
+  </span>
+</div>
+
+{% if did == 'created' %}
+  <div class="flash ok">
+    <strong>已开通：{{ created_username }}</strong>
+    （呼号 <strong>{{ created_callsign }}</strong>）—— 现在是<strong>队员</strong>，
+    可以直接用这个登录名与刚才设的密码登录，无需审核。
+    <br><span class="small">
+      把这个登录名和密码<strong>单独告诉本人</strong>；让他登录后到
+      <a href="/account">账号与密码</a> 改成自己的密码。
+      密码是单向加密的，忘了只能用 <code>gfvfw.cli set-password</code> 重置。
+    </span>
+  </div>
+{% endif %}
+{% if error %}<div class="flash warn">{{ error }}</div>{% endif %}
+
+<div class="panel">
+  <h2 style="margin-top:0">选一种方式</h2>
+  <table class="small">
+    <thead><tr><th style="width:150px">方式</th><th>什么时候用</th><th style="width:90px">结果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>名册已有成员</strong></td>
+        <td>人已经登记在名册里了（之前只建了成员、没开账号）——
+            直接挑他的呼号补一个账号，账号绑到<strong>同一个</strong>成员上</td>
+        <td>账号 + 绑定</td>
+      </tr>
+      <tr>
+        <td><strong>全新成员</strong></td>
+        <td>这人还不在名册里 —— 呼号与账号一起建</td>
+        <td>成员 + 账号</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+{# ================= 方式一：挂到名册已有成员 ================= #}
+<div class="panel">
+  <h2 style="margin-top:0">方式一 · 给名册里已有的成员开账号</h2>
+
+  {% if not candidates %}
+    <p class="muted small" style="margin:0">
+      名册里<strong>每位成员都已经有登录账号</strong>，没有可补号的。
+      {% if mode == 'existing' %}请改用下面的方式二。{% endif %}
+    </p>
+  {% else %}
+    <p class="small" style="margin-top:-4px">
+      下面这些成员<strong>还没有登录账号</strong>（共 {{ candidates | length }} 位）：
+    </p>
+    <form method="post" action="/enroll">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="mode" value="{{ mode_existing }}">
+
+      <input type="hidden" name="member_id" id="existing_member_id"
+             value="{{ member_id if mode == mode_existing else '' }}">
+
+      <div class="row">
+        <div class="field" style="min-width:220px">
+          <label for="pick_member">选择成员 <span class="muted">（必填）</span></label>
+          <select id="pick_member" onchange="
+              document.getElementById('existing_member_id').value = this.value;">
+            <option value="">— 请选择 —</option>
+            {% for m in candidates %}
+              <option value="{{ m.id }}"
+                      {{ 'selected' if member_id == m.id else '' }}>
+                {{ m.callsign }}（{{ m.status }}）
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field" style="min-width:180px">
+          <label for="ex_username">登录名 <span class="muted">（必填）</span></label>
+          <input type="text" id="ex_username" name="username"
+                 maxlength="{{ username_max }}"
+                 value="{{ form.username if form else '' }}">
+        </div>
+        <div class="field" style="min-width:160px">
+          <label for="ex_pw">密码</label>
+          <input type="password" id="ex_pw" name="password"
+                 autocomplete="new-password">
+        </div>
+        <div class="field" style="min-width:160px">
+          <label for="ex_pw2">再输一次</label>
+          <input type="password" id="ex_pw2" name="confirm_password"
+                 autocomplete="new-password">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit">开号并绑定到该成员</button>
+      </div>
+      <p class="small muted" style="margin-bottom:0">
+        账号会绑到选中的那位成员上，呼号沿用他的<strong>现有呼号</strong>（这里不用填）。
+        建完直接是<strong>队员</strong>，角色 <code>{{ role_code }}</code>。
+      </p>
+    </form>
+  {% endif %}
+</div>
+
+{# ================= 方式二：全新成员 ================= #}
+<div class="panel">
+  <h2 style="margin-top:0">方式二 · 全新成员（呼号与账号一起建）</h2>
+
+  <form method="post" action="/enroll">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="mode" value="{{ mode_new }}">
+
+    <div class="row">
+      <div class="field" style="min-width:200px">
+        <label for="new_callsign">呼号 <span class="muted">（必填）</span></label>
+        <input type="text" id="new_callsign" name="callsign"
+               maxlength="{{ callsign_max }}"
+               value="{{ form.callsign if form and mode == mode_new else '' }}">
+      </div>
+      <div class="field" style="min-width:200px">
+        <label for="new_username">登录名 <span class="muted">（必填）</span></label>
+        <input type="text" id="new_username" name="username"
+               maxlength="{{ username_max }}"
+               value="{{ form.username if form and mode == mode_new else '' }}">
+      </div>
+      <div class="field" style="min-width:160px">
+        <label for="new_pw">密码</label>
+        <input type="password" id="new_pw" name="password"
+               autocomplete="new-password">
+      </div>
+      <div class="field" style="min-width:160px">
+        <label for="new_pw2">再输一次</label>
+        <input type="password" id="new_pw2" name="confirm_password"
+               autocomplete="new-password">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" type="submit">建成员并开号</button>
+    </div>
+
+    <p class="small muted" style="margin-bottom:0">
+      ⚠️ <strong>呼号必须唯一</strong> —— 名册重名会让 ACMI 归并认错人。
+      呼号与登录名也<strong>不能同名</strong>（否则在名册里看起来像两个人同名）。
+      军衔不用在这里填：让本人上传自己的 Logbook 会自动写入。
+    </p>
+  </form>
+</div>
+
+<p class="muted small">
+  要授<strong>指挥 / 教官</strong>这类角色，请用
+  <code>gfvfw.cli grant-role --callsign &lt;呼号&gt; --role commander</code> ——
+  本页刻意只给 <code>{{ role_code }}</code>，不开提权口子。
+</p>
+{% endblock %}

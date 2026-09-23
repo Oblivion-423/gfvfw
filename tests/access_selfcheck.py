@@ -767,6 +767,313 @@ def main() -> int:
                                follow_redirects=False)
                 check("★ 队员不能编辑他人档案（需 member.edit）",
                       r.status_code == 403, "得到 %d" % r.status_code)
+
+            # ==============================================================
+            print("\n[11] ★ 隐藏页 /enroll：直接开队员（不在导航，靠权限把门）")
+            # ==============================================================
+            # 造一个「名册里有、但没有登录账号」的成员 —— 这正是"方式一"的场景
+            # 同时造一个"是名册呼号、但没有任何同名账号"的成员（CallSignClash）：
+            # ⚠️ 本测试里 make_person 建的成员都**同时有同名账号**，于是
+            #    "用户名已被占用"会先命中，跨命名空间那条检查根本轮不到 ——
+            #    用它来测只会得到一个假通过。
+            with TestSession() as db:
+                db.add(Member(callsign="NoAccount", status="active",
+                              visibility="members"))
+                db.add(Member(callsign="CallSignClash", status="active",
+                              visibility="members"))
+                db.commit()
+                silent_mid = db.scalar(
+                    select(Member.id).where(Member.callsign == "NoAccount"))
+
+            print("\n  -- 11a 谁能进这一页 --")
+            with TestClient(app) as client:
+                r = client.get("/enroll", follow_redirects=False)
+                check("★ 未登录访客 → 跳登录（303）", r.status_code == 303,
+                      "得到 %d" % r.status_code)
+
+            with TestSession() as db:
+                db.add(User(username="enrollguest",
+                            password_hash=hash_password(PW),
+                            status="pending", member_id=None))
+                db.commit()
+            with TestClient(app) as client:
+                login(client, "enrollguest")
+                r = client.get("/enroll", follow_redirects=False)
+                check("★ 游客 → 403 说明页（不是跳登录）", r.status_code == 403,
+                      "得到 %d" % r.status_code)
+
+            with TestClient(app) as client:
+                login(client, "rookie")
+                r = client.get("/enroll", follow_redirects=False)
+                check("★ 普通队员 → 403（需 application.review）",
+                      r.status_code == 403, "得到 %d" % r.status_code)
+                check("403 页面写明所需权限", "application.review" in r.text)
+                # ★ 不在任何导航里 —— 这一页只能靠地址进入
+                nav = nav_links(client.get("/").text)
+                check("★ 队员的导航里没有 /enroll", "/enroll" not in nav, str(nav))
+
+            with TestClient(app) as client:
+                login(client, "viper")            # owner
+                r = client.get("/enroll", follow_redirects=False)
+                check("★ owner 能打开（200）", r.status_code == 200,
+                      "得到 %d" % r.status_code)
+                check("页面同时给出两种方式",
+                      "方式一" in r.text and "方式二" in r.text)
+                nav = nav_links(r.text)
+                check("★ owner 的导航里也没有 /enroll", "/enroll" not in nav,
+                      str(nav))
+                for path in ("/", "/members", "/applications"):
+                    check("★ %s 页面上不出现 /enroll 链接" % path,
+                          "/enroll" not in client.get(path).text)
+
+                print("\n  -- 11b 方式一：给名册已有成员补账号 --")
+                page = client.get("/enroll")
+                tok = csrf_of(page.text)
+                r = client.post("/enroll", data={
+                    "mode": "existing", "member_id": silent_mid,
+                    "username": "noacct", "password": PW,
+                    "confirm_password": PW, "csrf_token": tok,
+                }, follow_redirects=False)
+                check("补号 → 303", r.status_code == 303,
+                      "得到 %d" % r.status_code)
+                check("回跳带 did=created",
+                      "did=created" in r.headers.get("location", ""),
+                      r.headers.get("location", ""))
+                with TestSession() as db:
+                    u = db.scalar(select(User).where(User.username == "noacct"))
+                    check("★ 账号已建立且是队员（active）",
+                          u is not None and u.status == "active",
+                          str(u.status) if u else "无账号")
+                    check("★ 账号绑到了**已有的**那个成员上（没新建成员）",
+                          u is not None and u.member_id == silent_mid,
+                          "member_id=%s 期望 %s" % (u.member_id if u else None,
+                                                    silent_mid))
+                    check("★ 名册人数没变（复用而非新建）",
+                          db.scalar(select(func.count()).select_from(Member)
+                                    .where(Member.callsign == "NoAccount")) == 1)
+                    roles = list(db.scalars(
+                        select(Role.code).join(
+                            MemberRole, MemberRole.role_id == Role.id)
+                        .where(MemberRole.member_id == silent_mid,
+                               MemberRole.revoked_at.is_(None))).all())
+                    check("★ 已分配 member 角色", "member" in roles, str(roles))
+                    check("★ 审计记录了 member.enroll",
+                          "member.enroll" in list(
+                              db.scalars(select(AuditLog.action)).all()))
+
+                with TestClient(app) as c2:
+                    login(c2, "noacct")
+                    r = c2.get("/members", follow_redirects=False)
+                    check("★ 新建的账号能登录，且已是队员（列表页 200）",
+                          r.status_code == 200, "得到 %d" % r.status_code)
+                    r = c2.get("/members/%s" % silent_mid, follow_redirects=False)
+                    check("★ 能进队员专属的成员详情页", r.status_code == 200,
+                          "得到 %d" % r.status_code)
+                    check("★ 身份标签不是「游客」", ">游客<" not in r.text)
+
+                print("\n  -- 11c 拒绝：重复开号 / 名字冲突 --")
+                page = client.get("/enroll")
+                tok = csrf_of(page.text)
+                r = client.post("/enroll", data={
+                    "mode": "existing", "member_id": silent_mid,
+                    "username": "noacct2", "password": PW,
+                    "confirm_password": PW, "csrf_token": tok,
+                })
+                check("★ 给已有账号的成员再开一次 → 400", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+                check("提示指出去改密码的正确路径",
+                      "已经有登录账号" in r.text and "set-password" in r.text)
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "Rookie", "username": "someone",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                })
+                check("★ 呼号与现有成员重名 → 400", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+                check("提示说明呼号已被名册占用", "名册" in r.text)
+
+                # 未撤销的申请也占着呼号（先到先得）
+                with TestSession() as db:
+                    u2 = db.scalar(select(User).where(User.username == "newbie"))
+                    db.add(Application(desired_callsign="Wanted",
+                                       status="submitted",
+                                       resulting_user_id=u2.id))
+                    db.commit()
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "Wanted", "username": "wanted1",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                })
+                check("★ 呼号被未撤销的申请占着 → 400", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+                check("提示说明是被申请占用", "申请" in r.text)
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "Viper", "username": "viper2",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                })
+                check("★ 呼号与已有**登录名**相同 → 400（跨命名空间）",
+                      r.status_code == 400, "得到 %d" % r.status_code)
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew", "username": "Rookie",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                })
+                check("★ 登录名与名册呼号相同 → 400（防冒充）",
+                      r.status_code == 400, "得到 %d" % r.status_code)
+                # ⚠️ 上面那条其实命中"登录名已被占用"分支 —— 本测试里 make_person
+                #    建的成员都同时有同名账号，所以两个检查会撞在一起。
+                #    要单独验证**跨命名空间**那条提示，得用一个
+                #    "是名册呼号、但不是任何用户名"的名字（CallSignClash 见下方）。
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew",
+                    "username": "CallSignClash",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                }, follow_redirects=False)
+                check("★ 登录名撞名册呼号（该呼号没有同名账号）→ 400",
+                      r.status_code == 400, "得到 %d" % r.status_code)
+                check("提示解释了为什么不行", "看起来就是那位成员" in r.text,
+                      r.text[:160])
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew", "username": "rookie",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                })
+                check("★ 登录名已被占用 → 400", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew", "username": "brandnew",
+                    "password": "123", "confirm_password": "123",
+                    "csrf_token": tok,
+                })
+                check("★ 弱密码 → 400", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew", "username": "brandnew",
+                    "password": PW, "confirm_password": PW + "x",
+                    "csrf_token": tok,
+                })
+                check("★ 两次密码不一致 → 400", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew", "username": "brandnew",
+                    "password": PW, "confirm_password": PW, "csrf_token": "",
+                })
+                check("★ 无 CSRF → 403", r.status_code == 403,
+                      "得到 %d" % r.status_code)
+
+                with TestSession() as db:
+                    check("★ 失败的尝试没留下半个成员",
+                          db.scalar(select(func.count()).select_from(Member)
+                                    .where(Member.callsign == "BrandNew")) == 0)
+
+                print("\n  -- 11d 方式二：呼号与账号一起建 --")
+                page = client.get("/enroll")
+                tok = csrf_of(page.text)
+                r = client.post("/enroll", data={
+                    "mode": "new", "callsign": "BrandNew", "username": "brandnew",
+                    "password": PW, "confirm_password": PW, "csrf_token": tok,
+                }, follow_redirects=False)
+                check("建成员 + 开号 → 303", r.status_code == 303,
+                      "得到 %d" % r.status_code)
+                with TestSession() as db:
+                    u = db.scalar(select(User).where(User.username == "brandnew"))
+                    m = db.scalar(select(Member).where(Member.callsign == "BrandNew"))
+                    check("★ 名册成员与账号都建好了",
+                          m is not None and u is not None)
+                    check("★ 账号是 active 且绑定到新成员",
+                          u is not None and u.status == "active"
+                          and m is not None and u.member_id == m.id)
+                    roles = list(db.scalars(
+                        select(Role.code).join(
+                            MemberRole, MemberRole.role_id == Role.id)
+                        .where(MemberRole.member_id == m.id,
+                               MemberRole.revoked_at.is_(None))).all())
+                    check("★ 已分配 member 角色", "member" in roles, str(roles))
+
+            # ==============================================================
+            print("\n[12] 两个命名空间不得互相冒充（本轮修掉的漏洞）")
+            # ==============================================================
+            # CallSignClash 已在 [11] 建好（是呼号，但不是任何用户名）。
+            import gfvfw.web.routers.apply as _applymod
+            _old_cap = _applymod.MAX_REGISTRATIONS_PER_IP_PER_DAY
+            # ⚠️ 前面的小节已经用同一个来源 IP 注册了好几个账号，
+            #    这里不抬上限的话，本节的注册全会被"今天注册太多了"挡住 ——
+            #    于是断言全部假失败（而真正要测的东西根本没跑到）。
+            _applymod.MAX_REGISTRATIONS_PER_IP_PER_DAY = 50
+            try:
+                with TestClient(app) as client:
+                    r = register(client, username="CallSignClash")
+                    check("★ 注册时用名册呼号当用户名 → 被拒（400）",
+                          r.status_code == 400, "得到 %d" % r.status_code)
+                    check("提示说清了为什么", "看起来就是那位成员" in r.text,
+                          r.text[:160])
+                    check("★ 大小写不同也拦得住",
+                          register(client, username="callsignclash").status_code
+                          == 400)
+                    # 反面确认：正常名字仍然能注册（别把功能一起堵死）
+                    check("★ 正常用户名不受影响（仍可注册）",
+                          register(client, username="okname").status_code == 303)
+            finally:
+                _applymod.MAX_REGISTRATIONS_PER_IP_PER_DAY = _old_cap
+
+            with TestClient(app) as client:
+                login(client, "viper")            # owner
+                page = client.get("/members/new")
+                tok = csrf_of(page.text)
+                # 反向：先有人注册了用户名 "enrollguest"，再建同名呼号的成员
+                r = client.post("/members/new", data={
+                    "callsign": "enrollguest", "status": "active",
+                    "visibility": "public", "csrf_token": tok,
+                })
+                check("★ 新建成员时呼号撞上已有登录名 → 被拒（400）",
+                      r.status_code == 400, "得到 %d" % r.status_code)
+                check("提示给出可操作的下一步",
+                      "换个呼号" in r.text or "改名" in r.text)
+                # 大小写不敏感
+                r = client.post("/members/new", data={
+                    "callsign": "EnrollGuest", "status": "active",
+                    "visibility": "public", "csrf_token": tok,
+                })
+                check("★ 大小写不同也拦得住", r.status_code == 400,
+                      "得到 %d" % r.status_code)
+                # 呼号唯一也变成不区分大小写了
+                r = client.post("/members/new", data={
+                    "callsign": "rookie", "status": "active",
+                    "visibility": "public", "csrf_token": tok,
+                })
+                check("★ 呼号唯一判定不区分大小写（rookie vs Rookie）",
+                      r.status_code == 400, "得到 %d" % r.status_code)
+
+            print("\n  -- CLI create-member 的名字冲突要给可读错误 --")
+            import os as _os
+            import subprocess as _sp
+            db_file = getattr(app, "_gfvfw_test_db", None)
+            with TestSession() as db:
+                db_url = str(db.get_bind().engine.url)
+            env = dict(_os.environ)
+            env["GFVFW_DATABASE_URL"] = db_url
+            env["GFVFW_SECRET_KEY"] = "cli-check-secret"
+            env["PYTHONIOENCODING"] = "utf-8"
+            ROOT = Path(__file__).resolve().parent.parent
+            for args, label in (
+                (["--callsign", "CliDup", "--username", "viper"],
+                 "用户名已被占用"),
+                (["--callsign", "Rookie"], "呼号已被名册占用"),
+                (["--callsign", "CliNew", "--username", "Rookie"],
+                 "登录名与名册呼号同名"),
+            ):
+                rr = _sp.run([sys.executable, "-m", "gfvfw.cli", "create-member",
+                              *args, "--password", PW],
+                             cwd=str(ROOT), capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", env=env)
+                out = (rr.stdout or "") + (rr.stderr or "")
+                check("★ CLI %s → 可读中文错误（不是 SQLAlchemy 堆栈）" % label,
+                      rr.returncode != 0 and "Traceback" not in out
+                      and "IntegrityError" not in out and len(out.strip()) > 0,
+                      "exit=%s out=%s" % (rr.returncode, out.strip()[-200:]))
         finally:
             import gfvfw.config as _c
             import gfvfw.db as _d
