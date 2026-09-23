@@ -77,7 +77,28 @@ load_env() {
 [ -d "$APP_DIR" ]       || die "应用目录不存在：$APP_DIR"
 [ -x "$PY" ]            || die "虚拟环境不存在：$PY（先看 DEPLOY.md 第 3 步）"
 
-say "GFVFW 更新${DRY_RUN:+（dry-run）}"
+# ⚠️ 先把工作目录切到应用根目录，**再**跑任何子命令。
+#
+# 这里踩过一次，代价是"备份直接失败、更新中止"：
+# `sudo` 会**保留调用者的工作目录**，所以以 root 从 `~` 里跑这个脚本时，
+# 子进程（尤其 `sudo -u gfvfw` 那几个）的 cwd 是 `/root`。而 `/root` 是 0700，
+# `gfvfw` 连进都进不去 —— 于是任何**相对路径**的文件访问都会变成
+# `PermissionError: [Errno 13] Permission denied`，报错还指向一个看起来
+# 毫不相干的文件名（当时是 `.env`，来自 pydantic 读配置）。
+#
+# 两处一起修才算修好：
+#   * 这里 `cd` 到一个所有相关用户都可达的目录（纵深防御）；
+#   * `gfvfw/config.py` 的 `env_file` 改成绝对路径（根治 —— 配置不该依赖 cwd）。
+#     只修这里的话，从别的目录启动 CLI/探针脚本还会踩同一个坑。
+cd "$APP_DIR"
+
+# ⚠️ 别写成 `${DRY_RUN:+（dry-run）}` —— `:+` 的判定是"变量已设置且非空"，
+#    而 `DRY_RUN=0` **也是非空的**，于是每次都会显示"（dry-run）"。
+if [ "$DRY_RUN" -eq 1 ]; then
+  say "GFVFW 更新（dry-run：只报告，不做任何改动）"
+else
+  say "GFVFW 更新"
+fi
 echo "  应用目录   $APP_DIR"
 echo "  环境文件   $ENV_FILE"
 echo "  服务       $SERVICE"
@@ -91,7 +112,13 @@ if [ "$DO_BACKUP" -eq 1 ]; then
   else
     # 备份失败必须**中止**：没有退路就不要往下改
     sudo -u "$OWNER" -H "$PY" "$APP_DIR/deploy/backup.py" --verify \
-      || die "备份失败，已中止更新"
+      || die "备份失败，已中止更新（代码**没有被改动**）。
+     先单独手工跑一次看完整报错（见 DEPLOY.md 第 9 步）：
+       sudo -u $OWNER -H bash -c 'cd $APP_DIR; set -a; . $ENV_FILE; set +a; \
+         .venv/bin/python deploy/backup.py --verify'
+     ⚠️ 若报错是 PermissionError 且指向某个**相对路径**的文件名（例如 '.env'），
+        那是工作目录不对：sudo 会保留调用者的 cwd，从 /root 里跑就会这样。
+        这个脚本已经 cd 到 $APP_DIR，理论上不该再出现 —— 真出现了请提 issue。"
   fi
 else
   warn "跳过备份（--no-backup）—— 出问题将没有退路"
@@ -134,7 +161,7 @@ elif [ -n "${GFVFW_RSYNC_FROM:-}" ]; then
 else
   die "既不是 git 仓库，也没给 GFVFW_RSYNC_FROM —— 无法取新代码。
      建议先 git init（见 DEPLOY.md 第 11 步），或：
-       GFVFW_RSYNC_FROM=user@dev:/srv/gfvfw/ bash $0"
+       GFVFW_RSYNC_FROM=user@dev:/srv/gfvfw/ bash $APP_DIR/deploy/update.sh"
 fi
 
 # ⚠️ rsync / 手工拷贝都可能弄丢执行位，而 git 的 100755 只有在 pull 新版本时

@@ -18,6 +18,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+#: 项目根目录（本文件在 tests/ 下）
+ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, select  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
@@ -229,6 +232,72 @@ def test_deployment_security() -> None:
                           has == expect_secure, blob[:110])
     finally:
         cfg.settings.https_only = saved_https
+
+
+def test_config_is_cwd_independent() -> None:
+    """配置**不能**依赖进程的工作目录。
+
+    这条测试来自一次真实故障：`gfvfw/config.py` 里写的是 ``env_file=".env"``
+    （相对路径），而 pydantic-settings 把它交给 ``os.stat`` 解析 ——
+    ``os.stat`` 相对**当前工作目录**。于是"配置读不读得到"取决于你在哪启动：
+
+    * 服务器上以 ``sudo -u gfvfw`` 从 ``/root`` 启动 ⟹
+      ``PermissionError: [Errno 13] Permission denied: '.env'``
+      （``/root`` 是 0700，gfvfw 进不去）⟹ ``deploy/update.sh`` 第 1 步的备份
+      直接失败、整个更新中止，而报错指向一个看起来毫不相干的文件名。
+    * 更阴的情况：cwd 恰好可达但没有 ``.env`` ⟹ **静默忽略配置**，
+      退回内置默认值，没有任何提示。
+
+    所以这里既查结构（``env_file`` 必须是绝对路径），也查行为
+    （从别的目录导入必须得到**完全相同**的配置）。
+    """
+    import gfvfw.config as cfgmod
+
+    env_file = Path(str(cfgmod.ENV_FILE))
+    check("★ .env 路径是绝对的（不随 cwd 变）", env_file.is_absolute(),
+          "得到 %r" % str(env_file))
+    check("★ .env 指向项目根目录", env_file.parent == cfgmod.BASE_DIR,
+          "得到 %s，期望在 %s 下" % (env_file, cfgmod.BASE_DIR))
+
+    probe = (
+        "import json, sys\n"
+        "sys.path.insert(0, %r)\n"
+        "from gfvfw.config import settings, ENV_FILE\n"
+        "print(json.dumps({'bms': str(settings.bms_install_path),\n"
+        "                  'db': settings.database_url,\n"
+        "                  'storage': str(settings.storage_dir),\n"
+        "                  'env_file': str(ENV_FILE)}))\n"
+    ) % str(ROOT)
+
+    def run_from(cwd: Path) -> dict:
+        import json
+        import subprocess
+        r = subprocess.run([sys.executable, "-c", probe], cwd=str(cwd),
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
+        assert r.returncode == 0, "从 %s 导入 config 失败：%s" % (cwd, r.stderr[-600:])
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    import tempfile as _tf
+    with _tf.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+        root_vals = run_from(ROOT)
+        other_vals = run_from(Path(td))
+        check("★ 从任意目录启动，配置完全一致",
+              root_vals == other_vals,
+              "\n    项目根: %s\n    临时目录: %s" % (root_vals, other_vals))
+
+        # 有 .env 时再做一次"真的读到了"的正面确认 —— 否则上面那条可能在
+        # "两边都读不到"的情况下假通过。
+        if env_file.is_file():
+            text = env_file.read_text(encoding="utf-8")
+            has_bms = any(ln.strip().startswith("GFVFW_BMS_INSTALL_PATH=")
+                          for ln in text.splitlines())
+            if has_bms:
+                check("★ 从别处启动也读到了 .env 里的值（不是退回默认 None）",
+                      other_vals["bms"] not in ("None", "", "null"),
+                      "bms=%r" % other_vals["bms"])
+            # 顺带确认 .env 确实是被读了的（路径一致即可，值对不对由上面管）
+            check(".env 被解析为绝对路径", Path(other_vals["env_file"]).is_absolute())
 
 
 def _build_plain_app(tmpdir: Path):
@@ -526,6 +595,7 @@ def main() -> int:
 
     test_schema_drift_is_repaired()
     test_deployment_security()
+    test_config_is_cwd_independent()
 
     print("\n" + "=" * 70)
     print("断言总数 %d，失败 %d" % (CHECKS[0], len(FAILURES)))

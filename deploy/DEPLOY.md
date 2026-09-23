@@ -1077,6 +1077,7 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | `sudo deploy/update.sh` 报 **`command not found`**，但 `ls` 明明看得见文件 | 文件**没有执行位**（git 里曾是 `100644`；Windows 上完全看不出来） | 先用 `sudo bash deploy/update.sh` 顶上；再 `chmod +x deploy/update.sh`。仓库里已修成 `100755` 且脚本会自愈，见第 2 步与第 11 步 |
 | `git pull` 被拒绝（`local changes`） | 有人在服务器上直接改了代码 | **不该这样**（目录对服务只读）；`git -C /srv/gfvfw status` 看改了什么，用 `git checkout -- .` 丢弃后重跑 |
 | 改了 `gfvfw.service` / `Caddyfile` 不生效 | 它们**不在** `ReadWritePaths` 里，是系统文件 | 改 `/etc/systemd/system/gfvfw.service` 与 `/etc/caddy/Caddyfile`，然后 `systemctl daemon-reload` / `systemctl reload caddy` |
+| `update.sh` 第 1 步报 **`PermissionError: [Errno 13] Permission denied: '.env'`**（或任何**相对路径**的文件名） | **工作目录不对**。`sudo` 会保留调用者的 cwd，而 `/root` 是 0700 —— `sudo -u gfvfw` 的子进程连进都进不去，于是任何相对路径访问都变成 EACCES。根因是配置用相对路径找 `.env` | 已修两处：`gfvfw/config.py` 的 `env_file` 改成**绝对路径**（根治 —— 配置不该依赖 cwd），`update.sh` 开头 `cd "$APP_DIR"`（纵深防御）。拉到包含此修复的版本后即不再出现 |
 
 ⚠️ **不要给服务加 `--workers N`**：SQLite 是单写者，多进程会写冲突。
 本项目所有缓存（剧场数据、解析状态）也都是按单进程设计的。

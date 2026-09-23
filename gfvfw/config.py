@@ -16,11 +16,31 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: 项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+#: ``.env`` 的**绝对**路径。本地开发用的配置覆盖（生产用 systemd 注入环境变量）。
+#:
+#: ⚠️⚠️ 这里**必须**是绝对路径，不能写 ``".env"``。
+#: 相对路径由 pydantic-settings 交给 ``os.stat`` 解析，而 ``os.stat`` 是**相对
+#: 进程当前工作目录**的 —— 于是"配置能不能读到"取决于**你在哪个目录启动程序**。
+#: 两种后果都出现过：
+#:
+#: * 能跑到那个目录时：``.env`` 被**静默忽略**，配置悄悄退回内置默认值
+#:   （实测：在 ``var/_cwdtest`` 下导入 config，``bms_install_path`` 变成 None，
+#:   而 ``.env`` 里明明写着 BMS 安装路径）。这与本文件顶部"所有配置项可通过
+#:   环境变量覆盖"的承诺直接冲突，而且**没有任何提示**。
+#: * 跑不到那个目录时：``PermissionError: [Errno 13] Permission denied: '.env'``
+#:   —— 在服务器上以 ``sudo -u gfvfw`` 从 ``/root`` 启动时就是这个报错，
+#:   ``gfvfw`` 连 ``/root`` 都进不去。``deploy/update.sh`` 第 1 步的备份
+#:   因此直接失败（见 DEPLOY.md 排错表）。
+#:
+#: 改成绝对路径后，**配置与 cwd 无关** —— 无论在哪个目录、以哪个用户启动，
+#: 读到的都是项目根目录下这一份。
+ENV_FILE = BASE_DIR / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GFVFW_",
-        env_file=".env",
+        env_file=ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
     )
