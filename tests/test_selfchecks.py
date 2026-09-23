@@ -106,3 +106,14 @@ def test_logbook_suite():
     """
     _assert_no_failures(_load("logbook_selfcheck.py"), "logbook")
 
+
+def test_access_suite():
+    """三档身份与公开/队内边界（游客 vs 队员）。
+
+    联队要求：**游客可随意申请，只能查看公开部分；队员由管理员从游客提升上来，
+    可查看仅限队内的资料。** 这里盯的是边界本身：未登录只能看公开页、
+    申请即建游客账号、游客进队内页面一律 403 且解释原因（**不跳登录**）、
+    提升后同一账号立刻拿到队内权限、拒绝后无法登录。
+    """
+    _assert_no_failures(_load("access_selfcheck.py"), "access")
+

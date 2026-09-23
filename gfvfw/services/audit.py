@@ -59,6 +59,16 @@ def _client_ip(request: Optional[Request]) -> Optional[str]:
     return peer
 
 
+def client_ip(request: Optional[Request]) -> Optional[str]:
+    """公开入口 —— 与审计用的是**同一套**可信代理判定。
+
+    ⚠️ 对外暴露是为了让"申请防刷"这类逻辑复用同一实现。
+    各写一份的话，两处的可信代理规则迟早不一致，
+    一边防住了伪造 XFF、另一边没防住。
+    """
+    return _client_ip(request)
+
+
 def record_audit(db: Session,
                  actor_user_id: Optional[str],
                  action: str,

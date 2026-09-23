@@ -30,10 +30,12 @@ from ..config import settings
 from ..db import SessionLocal, engine
 from ..security import SESSION_COOKIE
 from ..services.bootstrap import ensure_schema, seed
-from .deps import LoginRequired, PermissionDenied, load_principal
+from .deps import (
+    LoginRequired, MemberRequired, PermissionDenied, load_principal,
+)
 from .routers import (
-    account, acmi, auth, campaigns, home, logbook, members, missions,
-    placeholders, sorties, stats, theater,
+    account, acmi, applications, apply, auth, campaigns, home, logbook,
+    members, missions, placeholders, sorties, stats, theater,
 )
 from .templating import STATIC_DIR, render
 
@@ -94,6 +96,19 @@ def create_app() -> FastAPI:
         return RedirectResponse("/login?next=%s" % request.url.path,
                                 status_code=303)
 
+    @app.exception_handler(MemberRequired)
+    async def _member_required(request: Request, exc: MemberRequired):
+        """游客访问队内内容 —— 说清楚原因，**不要**重定向到登录页。
+
+        游客已经登录了，重定向会造成「点→回登录→再点」的死循环，
+        而且他看不出差的是"被提升为队员"这一步。
+        """
+        return render(request, "error.html", {
+            "code": 403,
+            "message": "这部分内容仅限**队员**查看。你目前是游客。",
+            "member_required": True,
+        }, status_code=403)
+
     @app.exception_handler(PermissionDenied)
     async def _permission_denied(request: Request, exc: PermissionDenied):
         return render(request, "error.html", {
@@ -112,6 +127,10 @@ def create_app() -> FastAPI:
     # ⚠️ 顺序：具体前缀在前，避免被更宽泛的路径抢占。
     app.include_router(home.router)
     app.include_router(auth.router)
+    # 公开申请（未登录即可提交）与管理员审批 —— 必须早于 members，
+    # 否则 /applications 可能被 /members/{id} 之类的宽泛路径抢走。
+    app.include_router(apply.router)
+    app.include_router(applications.router)
     app.include_router(account.router)
     app.include_router(logbook.router)
     app.include_router(members.router)

@@ -31,8 +31,16 @@
   </div>
 
   <p class="muted small" style="text-align:center">
-    账号由管理员开通。联队采用<strong>申请后开通</strong>的方式，
-    请先在公开页面提交入队申请。
+    {% if principal.is_authenticated %}
+      你已经用 <strong>{{ principal.display_name }}</strong> 登录了
+      （{{ principal.identity_label }}）。<br>
+      若看不到队内内容，说明账号还是游客 —— 见
+      <a href="/apply/status">我的申请</a>。
+    {% else %}
+      还没有账号？联队采用<strong>申请后开通</strong>的方式：
+      <a href="/apply">提交入队申请</a>后会立刻得到一个<strong>游客</strong>账号，
+      管理员提升为队员后即可查看队内资料。
+    {% endif %}
   </p>
 </div>
 {% endblock %}

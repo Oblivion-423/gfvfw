@@ -7,23 +7,41 @@
     <h1 style="font-size:34px;margin-bottom:6px">{{ code }}</h1>
     <p class="muted" style="margin:0 0 18px">{{ message }}</p>
 
-    {% if needed %}
+    {% if member_required %}
+      {# ⚠️ 游客已登录，把他重定向到登录页会造成「点→回登录→再点」的死循环，
+         所以这里明确告诉他差的是"被提升为队员"这一步。 #}
       <p class="small muted">
-        此操作需要权限：
-        {% for p in needed %}<span class="badge">{{ p }}</span> {% endfor %}
+        你当前的账号
+        <strong>{{ principal.display_name }}</strong>
+        是<strong>游客</strong>：已注册，但还没有被管理员提升为队员。
       </p>
       <p class="small muted">
-        你当前的身份是「{{ principal.primary_role_name }}」。
-        如需该权限，请联系联队管理员。
+        游客可以查看：首页概览、自己的申请进度、账号与密码设置。<br>
+        队员可以查看：成员名册、飞行日志、战役与训练记录、战场态势、统计、队内资料。
       </p>
-    {% endif %}
-
-    <div class="actions" style="justify-content:center">
-      <a class="btn ghost" href="/">返回首页</a>
-      {% if not principal.is_authenticated %}
-        <a class="btn" href="/login">登录</a>
+      <div class="actions" style="justify-content:center">
+        <a class="btn" href="/apply/status">查看我的申请进度</a>
+        <a class="btn ghost" href="/">返回首页</a>
+      </div>
+    {% else %}
+      {% if needed %}
+        <p class="small muted">
+          此操作需要权限：
+          {% for p in needed %}<span class="badge">{{ p }}</span> {% endfor %}
+        </p>
+        <p class="small muted">
+          你当前的身份是「{{ principal.identity_label }}」。
+          如需该权限，请联系联队管理员。
+        </p>
       {% endif %}
-    </div>
+
+      <div class="actions" style="justify-content:center">
+        <a class="btn ghost" href="/">返回首页</a>
+        {% if not principal.is_authenticated %}
+          <a class="btn" href="/login">登录</a>
+        {% endif %}
+      </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

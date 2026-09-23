@@ -410,7 +410,7 @@ def main() -> int:
                 r = client.get("/members/new")
                 check("联队指挥可新建成员", r.status_code == 200)
 
-            print("\n[7] 未激活账号只读")
+            print("\n[7] 未激活账号只读（游客档）")
             with TestSession() as db:
                 pend_mid, pend_user = make_user(db, TestSession, "Pending",
                                                "member", status="pending")
@@ -424,10 +424,14 @@ def main() -> int:
                 check("待审批账号可登录（有提示）", r.status_code == 303,
                       "得到 %d" % r.status_code)
                 r = client.get("/members", follow_redirects=False)
-                check("待审批账号无法访问名册", r.status_code == 303,
-                      "得到 %d" % r.status_code)
+                # ⚠️ 这里曾经断言 303（跳登录）。但游客**已经登录**，
+                #    重定向会造成「点→回登录→再点」的死循环，用户看不出
+                #    自己差的是"被提升为队员"这一步。现在改为 403 说明页。
+                check("★ 待审批账号访问名册 → 403（说明需要队员身份）",
+                      r.status_code == 403, "得到 %d" % r.status_code)
+                check("★ 403 页面给出申请进度入口", "/apply/status" in r.text)
                 r = client.get("/")
-                check("待审批账号首页有状态提示", "pending" in r.text)
+                check("★ 待审批账号首页显示「游客」身份", "游客" in r.text)
 
             print("\n[8] 软删除（R11）")
             with TestClient(app) as client:

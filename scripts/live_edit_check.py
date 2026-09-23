@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import http.cookiejar
 import os
 import re
 import sys
@@ -52,33 +53,60 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         print(f"  FAIL  {label}" + (f"  <- {detail}" if detail else ""))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """不跟随重定向。
+
+    ⚠️ 为什么需要：``urllib`` 默认跟随 303，于是"未登录访问队内页面"会表现为
+    **最终落在登录页（200）**，而不是 303 —— 断言 `status == 303` 必然假失败。
+    要验证"被拦住了"，就必须看到那一次 303 本身。
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
 class Session:
     """极简 cookie 会话（只用标准库，避免额外依赖）。"""
 
     def __init__(self, base: str) -> None:
         self.base = base.rstrip("/")
-        self.cookie = ""
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+        # 显式持有 cookie jar，让"跟随重定向"和"不跟随"两个 opener 共享登录态
+        self.jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar))
+        self.raw_opener = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(self.jar), _NoRedirect())
 
-    def _req(self, path: str, data: dict[str, str] | None = None) -> tuple[int, str]:
+    def _open(self, opener, path: str, data: dict[str, str] | None):
         url = self.base + path
         # ⚠️ 必须用 `is not None` 判断，不能用真值判断：
         #    `data={}` 是**假值**，会被误当成 GET 发出 —— 曾因此把 405 误读成
         #    "POST 路由没生效"，其实是探针自己发成了 GET。
         is_post = data is not None
         body = urllib.parse.urlencode(data or {}).encode() if is_post else None
-        req = urllib.request.Request(url, data=body, method="POST" if is_post else "GET")
+        req = urllib.request.Request(url, data=body,
+                                     method="POST" if is_post else "GET")
         req.add_header("User-Agent", "gfvfw-live-edit-check/1.0")
         if is_post:
             req.add_header("Content-Type", "application/x-www-form-urlencoded")
         try:
-            with self.opener.open(req, timeout=30) as resp:
-                return resp.status, resp.read().decode("utf-8", "replace")
+            with opener.open(req, timeout=30) as resp:
+                return (resp.status, resp.read().decode("utf-8", "replace"),
+                        resp.headers.get("Location", ""))
         except urllib.error.HTTPError as exc:
-            return exc.code, exc.read().decode("utf-8", "replace")
+            return (exc.code, exc.read().decode("utf-8", "replace"),
+                    exc.headers.get("Location", ""))
+
+    def _req(self, path: str, data: dict[str, str] | None = None) -> tuple[int, str]:
+        status, body, _loc = self._open(self.opener, path, data)
+        return status, body
 
     def get(self, path: str) -> tuple[int, str]:
         return self._req(path, None)
+
+    def get_raw(self, path: str) -> tuple[int, str, str]:
+        """GET 且**不跟随重定向**，返回 ``(状态码, 正文, Location)``。"""
+        return self._open(self.raw_opener, path, None)
 
     def post(self, path: str, data: dict[str, str]) -> tuple[int, str]:
         return self._req(path, data)
@@ -99,6 +127,19 @@ class Session:
             {"username": USERNAME, "password": PASSWORD, "csrf_token": token},
         )
         return status in (200, 303) and "登录" not in html[:400]
+
+
+_NAV_RE = re.compile(r'<nav class="nav">(.*?)</nav>', re.S)
+
+
+def _nav_of(html: str) -> str:
+    """只取顶部导航块。
+
+    ⚠️ 不能对整页做 ``'href="/members"' not in html`` —— 首页正文里本来就有
+    指向 /members 的链接，那样断言"访客导航里没有队内入口"会**假失败**。
+    """
+    m = _NAV_RE.search(html)
+    return m.group(1) if m else ""
 
 
 def main() -> int:
@@ -334,6 +375,56 @@ def main() -> int:
     print("\n[12] 账号页指向 Logbook")
     status, html = s.get("/account")
     check("账号页含 Logbook 入口", "/account/logbook" in html)
+
+    print("\n[13] 三档身份：公开 / 队内边界")
+    # 13a 未登录访客：只有公开页可进
+    for path in ("/", "/login", "/apply"):
+        status, _ = anon.get(path)
+        check(f"访客可访问 {path}", status == 200, f"status={status}")
+    # ⚠️ 用 get_raw（不跟随重定向）。跟随的话"被拦"会表现为最终落在登录页(200)，
+    #    断言 303 必然假失败 —— 之前就是踩了这个。
+    for path in ("/members", "/library", "/log/campaign", "/stats",
+                 "/theater", "/applications", "/account"):
+        status, _body, loc = anon.get_raw(path)
+        check(f"★ 访客 {path} → 跳登录（303）",
+              status == 303 and "/login" in loc, f"status={status} loc={loc}")
+
+    _, apply_html = anon.get("/apply")
+    check("★ 申请页公开且含表单", 'action="/apply"' in apply_html)
+    check("★ 申请页说明游客与队员的差别",
+          "游客" in apply_html and "队员" in apply_html)
+
+    # ⚠️ 导航断言必须只看 <nav> 那一块：首页正文里本来就有指向 /members 的链接，
+    #    对整页做 `href="/members" not in html` 会假失败。
+    _, home = anon.get("/")
+    anon_nav = _nav_of(home)
+    check("★ 拿到导航块（后续断言的前提）", bool(anon_nav))
+    for href in ("/members", "/theater", "/library", "/apply/status"):
+        check(f"★ 访客导航里没有 {href}", f'href="{href}"' not in anon_nav)
+    check("★ 访客导航里有申请入口", 'href="/apply"' in anon_nav)
+
+    # 13b 已登录的 owner：队内入口齐全
+    _, home = s.get("/")
+    mem_nav = _nav_of(home)
+    for href in ("/members", "/library", "/applications"):
+        check(f"★ 队员导航里有 {href}", f'href="{href}"' in mem_nav)
+    status, html = s.get("/applications")
+    check("★ 入队审批页 200（owner 有 application.review）",
+          status == 200, f"status={status}")
+    # 库里可能没有任何待审批游客 —— 那就该看到空状态说明，而不是按钮
+    has_guest = "提升为队员" in html
+    check("★ 审批页要么列出待提升游客、要么给出空状态说明",
+          has_guest or "没有待审批的游客" in html,
+          "既没有按钮也没有空状态文案")
+    if has_guest:
+        check("★ 待审批行带呼号输入框", 'name="callsign"' in html)
+    else:
+        print("  SKIP  库里没有待审批游客 —— 按钮形态留给 access_selfcheck 覆盖")
+    status, html = s.get("/apply/status")
+    check("★ 队员也能打开申请进度页", status == 200, f"status={status}")
+    check("进度页说明已是队员", "队员" in html)
+    status, _ = s.get("/library")
+    check("★ 资料查询对队员开放（200）", status == 200, f"status={status}")
 
     return report()
 

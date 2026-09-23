@@ -17,41 +17,66 @@
       <nav class="nav">
         <a href="/" class="{{ 'active' if current_path == '/' else '' }}">概览</a>
 
-        <a href="/members" class="{{ 'active' if current_path.startswith('/members') else '' }}">成员</a>
+        {# ⚠️ 导航必须与真实权限一致：点了就看到"需要队员身份"的页面
+           比菜单里根本没有更让人困惑。所以每一项都用权限点判定，
+           而不是一律显示。 #}
+        {% if principal.is_member %}
+          <a href="/members" class="{{ 'active' if current_path.startswith('/members') else '' }}">成员</a>
 
-        <a href="/theater" class="{{ 'active' if current_path.startswith('/theater') else '' }}">战役管理</a>
+          <a href="/theater" class="{{ 'active' if current_path.startswith('/theater') else '' }}">战役管理</a>
 
-        <div class="nav-group">
-          {% set fr_active = current_path.startswith('/log') %}
-          <a href="/log/campaign" class="{{ 'active' if fr_active else '' }}">
-            飞行记录 <span class="caret">▼</span>
-          </a>
-          <div class="nav-sub">
-            <a href="/log/campaign" class="{{ 'active' if current_path == '/log/campaign' else '' }}">战役记录</a>
-            <a href="/log/training" class="{{ 'active' if current_path == '/log/training' else '' }}">训练记录</a>
-            <a href="/log/pilots" class="{{ 'active' if current_path == '/log/pilots' else '' }}">飞行员个人记录</a>
-            <div class="sep"></div>
-            <a href="/log" class="{{ 'active' if current_path == '/log' else '' }}">高级查询</a>
+          <div class="nav-group">
+            {% set fr_active = current_path.startswith('/log') %}
+            <a href="/log/campaign" class="{{ 'active' if fr_active else '' }}">
+              飞行记录 <span class="caret">▼</span>
+            </a>
+            <div class="nav-sub">
+              <a href="/log/campaign" class="{{ 'active' if current_path == '/log/campaign' else '' }}">战役记录</a>
+              <a href="/log/training" class="{{ 'active' if current_path == '/log/training' else '' }}">训练记录</a>
+              <a href="/log/pilots" class="{{ 'active' if current_path == '/log/pilots' else '' }}">飞行员个人记录</a>
+              <div class="sep"></div>
+              <a href="/log" class="{{ 'active' if current_path == '/log' else '' }}">高级查询</a>
+            </div>
           </div>
-        </div>
 
-        <a href="/library" class="{{ 'active' if current_path.startswith('/library') else '' }}">资料查询</a>
+          <a href="/library" class="{{ 'active' if current_path.startswith('/library') else '' }}">资料查询</a>
 
-        {% if principal.can('log.view') %}
-          <a href="/stats" class="{{ 'active' if current_path.startswith('/stats') else '' }}">统计</a>
+          {% if principal.can('log.view') %}
+            <a href="/stats" class="{{ 'active' if current_path.startswith('/stats') else '' }}">统计</a>
+          {% endif %}
+
+          {% if principal.can('application.review') %}
+            <a href="/applications" class="{{ 'active' if current_path.startswith('/applications') else '' }}">
+              入队审批
+              {% if pending_applications %}
+                <span class="badge warn">{{ pending_applications }}</span>
+              {% endif %}
+            </a>
+          {% endif %}
+        {% elif principal.is_guest %}
+          {# 游客：已注册未入队。给他"我的申请"这个落脚点，
+             否则登录后唯一能去的地方只有账号页，会以为系统坏了。 #}
+          <a href="/apply/status" class="{{ 'active' if current_path == '/apply/status' else '' }}">我的申请</a>
+          <a href="/apply" class="{{ 'active' if current_path == '/apply' else '' }}">入队申请</a>
+        {% else %}
+          {# 未登录访客：只有公开入口。**不要**给「我的申请」——
+             他还没有申请，点进去只会被送回登录页。 #}
+          <a href="/apply" class="{{ 'active' if current_path == '/apply' else '' }}">申请入队</a>
         {% endif %}
       </nav>
 
       <div class="userbox">
         {% if principal.is_authenticated %}
           <a class="who" href="/account" title="账号与密码">{{ principal.display_name }}</a>
-          <span class="role">{{ principal.primary_role_name }}</span>
+          {# 身份标签：游客 / 队员 / 角色名。见 deps.Principal.identity_label #}
+          <span class="role">{{ principal.identity_label }}</span>
           <form method="post" action="/logout" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button class="btn ghost" type="submit">退出</button>
           </form>
         {% else %}
           <a class="btn ghost" href="/login">登录</a>
+          <a class="btn" href="/apply">申请入队</a>
         {% endif %}
       </div>
     </div>

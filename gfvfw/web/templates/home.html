@@ -129,17 +129,24 @@
   </p>
 </div>
 
-{% if not principal.is_active_user %}
+{% if not principal.is_member %}
 <div class="panel">
   <h3 style="margin-top:0">当前身份</h3>
   <p class="muted small" style="margin:0">
-    {% if principal.is_authenticated %}
+    {% if principal.is_guest %}
+      你是<strong>游客</strong>（账号
+      <span class="badge warn">{{ USER_STATUS_LABELS.get(principal.user.status, principal.user.status) }}</span>）：
+      已注册，但还没有被管理员提升为队员，因此只能查看公开内容。
+      <br>
+      <a href="/apply/status">查看我的申请进度</a> —— 管理员提升后，队内内容会自动开放。
+    {% elif principal.is_authenticated %}
       你已登录，但账号状态为
       <span class="badge warn">{{ principal.user.status }}</span>，
       暂时只能查看公开内容，无法进入内部数据。
     {% else %}
       你以<strong>访客</strong>身份浏览，仅能看到公开内容。
-      <a href="/login">登录</a>后可查看内部数据。
+      想查看成员名册、飞行日志与战场态势，请
+      <a href="/apply">提交入队申请</a>，由管理员提升为队员。
     {% endif %}
   </p>
 </div>

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}我的申请 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>我的申请</h1>
+    <div class="sub">
+      {% if is_member %}
+        你已经是<strong>队员</strong>，队内内容全部开放。
+      {% else %}
+        你目前是<strong>游客</strong>：可以查看公开部分，队内内容需要管理员提升后才能看到。
+      {% endif %}
+    </div>
+  </div>
+  <div>
+    <a class="btn ghost" href="/account">账号与密码</a>
+    <a class="btn ghost" href="/">返回首页</a>
+  </div>
+</div>
+
+{# ------------------------------------------------------------------ #}
+{# 当前身份与能看到什么 —— 游客最需要知道"我还差哪一步" #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">当前身份</h2>
+  <table>
+    <tbody>
+      <tr>
+        <th style="width:140px">身份</th>
+        <td>
+          {% if is_member %}
+            <span class="badge ok">队员</span>
+            <strong>{{ principal.display_name }}</strong>
+          {% else %}
+            <span class="badge warn">游客</span>
+            <strong>{{ principal.display_name }}</strong>
+            <span class="muted small">（已注册，尚未入队）</span>
+          {% endif %}
+        </td>
+      </tr>
+      <tr>
+        <th>账号</th>
+        <td class="mono small">{{ principal.user.username }}</td>
+      </tr>
+      <tr>
+        <th>可以查看</th>
+        <td>
+          {% if is_member %}
+            队内全部内容：成员名册、飞行日志、战役与训练记录、战场态势、统计、队内资料
+          {% else %}
+            首页概览 · 本页 · 账号与密码设置
+            <br><span class="muted small">
+              暂不可查看：成员名册、飞行日志、战役态势、统计、队内资料
+            </span>
+          {% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  {% if not is_member %}
+    <p class="small" style="margin:12px 0 0">
+      <strong>下一步：</strong>等管理员把你的账号提升为队员。
+      提升之后刷新本页，队内内容会自动开放 —— 不需要你再做什么。
+    </p>
+  {% endif %}
+</div>
+
+{# ------------------------------------------------------------------ #}
+{# 申请记录 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">申请记录（{{ applications | length }}）</h2>
+  {% if not applications %}
+    <p class="muted small" style="margin:0">
+      {% if is_member %}
+        你的账号是管理员直接开通的，没有对应的入队申请记录。
+      {% else %}
+        没有找到申请记录。如果是管理员直接给你开的账号，这也是正常的。
+      {% endif %}
+    </p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th>提交时间</th><th>想要的呼号</th><th>状态</th>
+          <th>说明</th><th>管理员备注</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in applications %}
+        {% set label, explain = status_labels.get(a.status, (a.status, '')) %}
+        <tr>
+          <td class="small">{{ a.created_at | datetime }}</td>
+          <td>{{ a.desired_callsign }}</td>
+          <td>
+            <span class="badge {{ 'ok' if a.status == 'activated' else ('warn' if a.status == 'rejected' else '') }}">
+              {{ label }}
+            </span>
+          </td>
+          <td class="small muted">{{ explain }}</td>
+          <td class="small">{{ a.review_note or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+
+  <p class="small muted" style="margin:10px 0 0">
+    如果长时间没有进展，可以直接联系联队管理员 —— 申请不会自动过期。
+  </p>
+</div>
+{% endblock %}

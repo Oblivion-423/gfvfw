@@ -39,7 +39,7 @@ from ...permissions import LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY
 from ...security import verify_csrf
 from ...services import logbook as LB
 from ...services.audit import record_audit
-from ..deps import Principal, get_db, require, require_login
+from ..deps import Principal, get_db, require, require_member
 from ..templating import render
 
 log = logging.getLogger("gfvfw.web.logbook")
@@ -169,7 +169,7 @@ def _parsed_view(rec) -> dict | None:
 
 @router.get("/account/logbook")
 def own_logbook(request: Request,
-                principal: Principal = Depends(require_login),
+                principal: Principal = Depends(require_member),
                 db: Session = Depends(get_db)):
     """成员自己的 Logbook 页。"""
     member = principal.member
@@ -203,7 +203,7 @@ async def upload_own(request: Request,
                      file: UploadFile = File(...),
                      note: str = Form(""),
                      csrf_token: str = Form(""),
-                     principal: Principal = Depends(require_login),
+                     principal: Principal = Depends(require_member),
                      db: Session = Depends(get_db)):
     if principal.member is None:
         raise HTTPException(status_code=400, detail="当前账号未绑定名册成员")
@@ -293,7 +293,7 @@ async def _do_upload(request: Request, principal: Principal, db: Session,
 @router.post("/logbook/{logbook_id}/reparse")
 def reparse(logbook_id: str, request: Request,
             csrf_token: str = Form(""),
-            principal: Principal = Depends(require_login),
+            principal: Principal = Depends(require_member),
             db: Session = Depends(get_db)):
     """用**已归档的原件**重新解析一次并同步名册。
 
@@ -340,7 +340,7 @@ def reparse(logbook_id: str, request: Request,
 
 @router.get("/logbook/{logbook_id}/download")
 def download(logbook_id: str,
-             principal: Principal = Depends(require_login),
+             principal: Principal = Depends(require_member),
              db: Session = Depends(get_db)):
     rec = LB.get(db, logbook_id)
     if rec is None:
@@ -360,7 +360,7 @@ def download(logbook_id: str,
 @router.post("/logbook/{logbook_id}/delete")
 def delete(logbook_id: str, request: Request,
            csrf_token: str = Form(""),
-           principal: Principal = Depends(require_login),
+           principal: Principal = Depends(require_member),
            db: Session = Depends(get_db)):
 
     verify_csrf(request, csrf_token)

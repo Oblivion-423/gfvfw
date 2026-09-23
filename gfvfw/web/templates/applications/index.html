@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}入队审批 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>入队审批</h1>
+    <div class="sub">
+      把<strong>游客</strong>提升为<strong>队员</strong>。提升后该账号立刻获得队内权限
+      （名册、飞行日志、战役态势、统计、队内资料）。
+    </div>
+  </div>
+  <div>
+    <a class="btn ghost" href="/members">成员名册</a>
+  </div>
+</div>
+
+{% if did == 'promoted' %}<div class="flash ok">已提升为队员，队内内容对该账号立即开放。</div>{% endif %}
+{% if did == 'rejected' %}<div class="flash ok">已拒绝该申请，账号转为停用（无法登录）。</div>{% endif %}
+{% if error %}<div class="flash warn">{{ error }}</div>{% endif %}
+
+{# ------------------------------------------------------------------ #}
+{# 待审批的游客 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">
+    待审批的游客（{{ rows | length }}）
+    <span class="muted small" style="font-weight:400">
+      · 当前队员 {{ active_count }} 人
+    </span>
+  </h2>
+
+  {% if not rows %}
+    <p class="muted small" style="margin:0">
+      没有待审批的游客。有人提交<a href="/apply">入队申请</a>后会出现在这里。
+    </p>
+  {% else %}
+    <table>
+      <thead>
+        <tr>
+          <th style="width:110px">用户名</th>
+          <th style="width:110px">想要呼号</th>
+          <th>申请内容</th>
+          <th style="width:130px">提交时间</th>
+          <th style="width:210px">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        {% set u = r.user %}
+        {% set a = r.application %}
+        <tr>
+          <td>
+            <strong>{{ u.username }}</strong>
+            {% if u.email %}<br><span class="muted small">{{ u.email }}</span>{% endif %}
+          </td>
+          <td>
+            <form method="post" action="/applications/{{ u.id }}/promote"
+                  id="promote-{{ u.id }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="text" name="callsign" maxlength="64" style="width:104px"
+                     value="{{ a.desired_callsign if a else u.username }}">
+            </form>
+          </td>
+          <td class="small">
+            {% if a %}
+              {% if a.experience %}<div><strong>经历：</strong>{{ a.experience }}</div>{% endif %}
+              {% if a.intent %}<div><strong>意向：</strong>{{ a.intent }}</div>{% endif %}
+              {% if a.contact %}<div><strong>联系：</strong>{{ a.contact }}</div>{% endif %}
+              {% if not a.experience and not a.intent and not a.contact %}
+                <span class="muted">（申请时没填补充信息）</span>
+              {% endif %}
+            {% else %}
+              <span class="muted">管理员直接开通的账号，没有申请表</span>
+            {% endif %}
+          </td>
+          <td class="small muted">
+            {{ (a.created_at if a else u.created_at) | datetime }}
+          </td>
+          <td class="small">
+            <button class="btn" type="submit" form="promote-{{ u.id }}"
+                    onclick="return confirm('把 {{ u.username }} 提升为队员？该账号将立刻看到队内全部内容。');">
+              提升为队员
+            </button>
+            <form method="post" action="/applications/{{ u.id }}/reject"
+                  style="display:inline"
+                  onsubmit="return confirm('拒绝 {{ u.username }} 的申请？该账号将被停用。');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="text" name="note" placeholder="原因（可选）"
+                     maxlength="200" style="width:120px">
+              <button class="btn ghost" type="submit">拒绝</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="small muted" style="margin:10px 0 0">
+      ⚠️ <strong>呼号必须唯一</strong>：名册里重名会让 ACMI 归并认错人。
+      提升时会再校验一次，冲突会明确报错而不会写入半个成员。
+      提升<strong>不会</strong>自动填军衔 —— 让该成员上传自己的 Logbook 即可自动获得。
+    </p>
+  {% endif %}
+</div>
+
+{# ------------------------------------------------------------------ #}
+{# 最近处理过的 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel">
+  <h2 style="margin-top:0">最近处理</h2>
+  {% if not recent %}
+    <p class="muted small" style="margin:0">还没有处理过任何申请。</p>
+  {% else %}
+    <table>
+      <thead>
+        <tr><th>呼号</th><th>结果</th><th>处理时间</th><th>备注</th></tr>
+      </thead>
+      <tbody>
+        {% for a in recent %}
+        <tr>
+          <td>{{ a.desired_callsign }}</td>
+          <td>
+            {% if a.status == 'activated' %}
+              <span class="badge ok">已提升为队员</span>
+            {% else %}
+              <span class="badge warn">已拒绝</span>
+            {% endif %}
+          </td>
+          <td class="small muted">{{ a.reviewed_at | datetime if a.reviewed_at else '—' }}</td>
+          <td class="small">{{ a.review_note or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+{% endblock %}

@@ -181,6 +181,15 @@ templates.env.globals["SITE_NAME"] = settings.site_name
 templates.env.globals["SITE_NAME_EN"] = settings.site_name_en
 templates.env.globals["SITE_ABBR"] = settings.site_abbr
 
+#: 账号状态的中文标签。作为**全局**注入，任何模板都能用。
+#:
+#: ⚠️ 之前只有个别路由（如 logbook）通过上下文传 ``status_labels``，
+#:    于是模板里直接写 ``USER_STATUS_LABELS`` 会拿到 Undefined 并在访问属性时
+#:    抛 UndefinedError —— 那是"某个页面才炸"的隐蔽 bug。
+from ..models import USER_STATUS_LABELS  # noqa: E402
+
+templates.env.globals["USER_STATUS_LABELS"] = USER_STATUS_LABELS
+
 
 #: 查询串提示的最大长度。见 :func:`_flash_from_query`。
 _FLASH_MAX = 200
