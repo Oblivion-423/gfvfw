@@ -1,14 +1,17 @@
 # ==========================================================================
 # GFVFW 反向代理配置（Caddy 2.x）
 #
-# 用法：把 gfvfw.example.com 换成你的域名，放到 /etc/caddy/Caddyfile，
-#       然后 `caddy validate --config /etc/caddy/Caddyfile` 再 `systemctl reload caddy`。
+# 用法：放到 /etc/caddy/Caddyfile，然后
+#   caddy validate --config /etc/caddy/Caddyfile && systemctl reload caddy
+#
+# ⚠️ 域名已填为联队的真实域名。换域名时要同时改下面那个站点块，
+#    并确认 DNS 的 A 记录已指向本机 —— Caddy 靠它自动申请 Let's Encrypt 证书。
 #
 # ⚠️ 本文件刻意只使用最小的一组指令。Caddy 无法在本项目的开发机上验证，
 #    所以宁可少写：每个指令的确切拼写都以能通过 caddy validate 为准。
 # ==========================================================================
 
-gfvfw.example.com {
+gfvfw.top {
 	# 压缩文本响应（HTML/CSS/JSON）。对已经压过的 ACMI（zip）几乎无效果，
 	# 但也无害 —— Caddy 会跳过 image/* 等类型。
 	encode zstd gzip

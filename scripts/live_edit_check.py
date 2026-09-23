@@ -17,7 +17,7 @@
    本地开发用默认值即可；线上请显式传环境变量：
 
        GFVFW_LIVE_USER=auditor GFVFW_LIVE_PASSWORD='...' \\
-         .venv/bin/python scripts/live_edit_check.py https://你的域名
+         .venv/bin/python scripts/live_edit_check.py https://gfvfw.top
 """
 
 from __future__ import annotations

@@ -321,15 +321,15 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
 sudo apt update && sudo apt install -y caddy
 
 sudo cp /srv/gfvfw/deploy/Caddyfile /etc/caddy/Caddyfile
-sudo nano /etc/caddy/Caddyfile          # 把 gfvfw.example.com 换成你的域名
+sudo nano /etc/caddy/Caddyfile          # 域名已填好 gfvfw.top；换域名时改这里
 sudo caddy validate --config /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
 ```bash
 # 验证 HTTPS 与跳转
-curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://你的域名/
-curl -sS -o /dev/null -w '%{http_code}\n' https://你的域名/login     # 期望 200
+curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://gfvfw.top/
+curl -sS -o /dev/null -w '%{http_code}\n' https://gfvfw.top/login     # 期望 200
 ```
 
 ⚠️ **`Caddyfile` 里那行 `header_up X-Forwarded-For {http.request.remote.host}`
@@ -411,9 +411,9 @@ sudo systemctl start gfvfw
 
 ```bash
 # 逐条应全为 OK
-curl -sS -o /dev/null -w 'HTTP 跳转  %{http_code} -> %{redirect_url}\n' http://你的域名/
-curl -sS -o /dev/null -w 'HTTPS 登录页 %{http_code}\n' https://你的域名/login
-curl -sSI https://你的域名/login | grep -i '^set-cookie'    # 必须含 Secure
+curl -sS -o /dev/null -w 'HTTP 跳转  %{http_code} -> %{redirect_url}\n' http://gfvfw.top/
+curl -sS -o /dev/null -w 'HTTPS 登录页 %{http_code}\n' https://gfvfw.top/login
+curl -sSI https://gfvfw.top/login | grep -i '^set-cookie'    # 必须含 Secure
 ```
 
 | # | 检查项 | 期望 |
@@ -446,7 +446,7 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; \
   .venv/bin/python scripts/live_edit_check.py http://127.0.0.1:8000'
 ```
 
-若走反代，把地址换成 `https://你的域名` 更贴近真实（会顺带验证 Cookie/跳转）。
+若走反代，把地址换成 `https://gfvfw.top` 更贴近真实（会顺带验证 Cookie/跳转）。
 
 **它不会改动任何数据**，只做 GET 与"注定被拒"的 POST（不上传文件）。
 期望输出末尾：
@@ -593,7 +593,7 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 流程全在界面上：
 
 ```
-对方自己在 https://你的域名/apply 填表（公开，不需要你开账号）
+对方自己在 https://gfvfw.top/apply 填表（公开，不需要你开账号）
    → 立刻得到一个「游客」账号，只能看首页
    → 你在导航栏「入队审批」（带角标）里看到他的申请
    → 核对呼号没重名后点「提升为队员」
