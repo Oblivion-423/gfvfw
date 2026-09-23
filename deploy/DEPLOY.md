@@ -540,6 +540,7 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
 ## 7. 应用服务（systemd）
 
 ```bash
+systemctl --version | head -1          # ⚠️ 先看版本，见下方说明
 sudo cp /srv/gfvfw/deploy/gfvfw.service /etc/systemd/system/
 sudo systemd-analyze verify /etc/systemd/system/gfvfw.service    # 语法自检
 sudo systemctl daemon-reload
@@ -548,6 +549,31 @@ sudo systemctl enable --now gfvfw
 systemctl status gfvfw --no-pager
 journalctl -u gfvfw -n 30 --no-pager        # 看启动日志
 ```
+
+> ⚠️ **`Type=exec` 需要 systemd 240+。**
+> `gfvfw.service` 里写的是 `Type=exec`（比 `simple` 更严格：它会等 `exec()`
+> 真正成功后才认为服务已启动，这样"二进制/解释器不存在"会立刻报错，
+> 而不是变成一个起来又立刻死掉的循环）。
+>
+> 但 **RHEL 8 系（含 Alibaba Cloud Linux 3 / Anolis 8）自带 systemd 239**，
+> 不认识 `exec` 这个取值，单元会**加载失败**：
+> ```
+> /etc/systemd/system/gfvfw.service: Unknown value for Type=: exec
+> ```
+>
+> 先查版本，低于 240 就换成 `simple`（语义差别很小，功能不受影响）：
+>
+> ```bash
+> V=$(systemctl --version | head -1 | awk '{print $2}')
+> echo "systemd 版本: $V"
+> if [ "$V" -lt 240 ]; then
+>   sed -i 's/^Type=exec$/Type=simple/' /etc/systemd/system/gfvfw.service
+>   echo "已降级为 Type=simple（systemd < 240）"
+> fi
+> systemd-analyze verify /etc/systemd/system/gfvfw.service
+> ```
+>
+> 实测：Alibaba Cloud Linux 3 是 systemd 239 → 必须做这一步。
 
 应用只监听 `127.0.0.1:8000`，外部访问一律经 Caddy：
 
