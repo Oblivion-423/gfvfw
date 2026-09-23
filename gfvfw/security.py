@@ -64,6 +64,39 @@ def needs_rehash(stored_hash: str) -> bool:
         return False
 
 
+#: 密码最短长度。联队是内部系统，不强制复杂度规则（那只会逼出 `Passw0rd!` 这类
+#: 弱密码），只设下限 + 拦几个最常见的弱口令。
+MIN_PASSWORD_LENGTH = 8
+
+#: 明显弱口令黑名单（小写比较）。不追求完备 —— 真正的防线是 argon2id + 登录锁定。
+_WEAK_PASSWORDS = frozenset({
+    "password", "passw0rd", "12345678", "123456789", "1234567890",
+    "qwertyui", "qwerty123", "admin123", "administrator", "letmein1",
+    "iloveyou", "football", "baseball", "sunshine", "gfvfw", "gfvfw123",
+    "falcon", "falconbms", "bms12345", "11111111", "88888888", "abc12345",
+})
+
+
+def password_problem(plain: str) -> Optional[str]:
+    """校验密码强度，返回**问题描述**；合规时返回 ``None``。
+
+    ⚠️ CLI 与 Web 改密**共用这一个函数** —— 否则会出现"网页不让设的密码
+    命令行能设"，两套规则迟早不一致。
+    """
+    if plain is None:
+        return "密码不能为空"
+    if len(plain) < MIN_PASSWORD_LENGTH:
+        return "密码至少 %d 位" % MIN_PASSWORD_LENGTH
+    if len(plain) > 200:
+        # argon2 对超长输入会把整串喂进去；设个上限避免有人用 1 MB 密码打服务
+        return "密码过长（最多 200 位）"
+    if plain.strip() != plain:
+        return "密码首尾不要有空格"
+    if plain.lower() in _WEAK_PASSWORDS:
+        return "这个密码太常见了，请换一个"
+    return None
+
+
 # --------------------------------------------------------------------------
 # 令牌与哈希
 # --------------------------------------------------------------------------

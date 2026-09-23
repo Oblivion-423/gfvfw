@@ -79,6 +79,9 @@ class User(IdMixin, TimestampMixin, Base):
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    #: 上次改密时间。用于回答"这个账号的密码多久没换了"，
+    #: 也为将来做"强制定期改密"留出依据。新增列由 schema_sync 自动补上。
+    password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     member: Mapped[Optional["Member"]] = relationship(
         back_populates="user",

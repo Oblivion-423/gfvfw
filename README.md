@@ -21,16 +21,17 @@
 | **战役管理（BMS `.cam` 存档解析 + 战场态势）** | ✅ **完成**，145 个断言通过 |
 | **ACMI 工作台内嵌进飞行记录 / 战役管理** | ✅ **完成**，含自动归入战役 |
 | **上线后人工修正（任务/架次可编辑删除、补录、删 ACMI、删存档）** | ✅ **完成**，67 个断言通过 |
+| **账号与密码（自助改密 + CLI 运维重置）** | ✅ **完成**，58 个断言通过 |
 | 资料查询 | ⬜ **待实现**（表已建，`/library` 有占位说明） |
 | **部署产物（systemd / Caddy / 备份 / 一键升级）** | ✅ **完成** → `deploy/DEPLOY.md` |
-| **纳入 git 版本管理** | ✅ **完成**（首个提交 `5b13440`，124 文件，LF 已强制） |
+| **纳入 git 版本管理** | ✅ **完成**（首个提交 `5b13440`，125 文件，LF 已强制） |
 | 实际部署到 VPS | ⬜ 待你在服务器上执行 |
 | Alembic 迁移 | ⬜ 未接（现靠 `schema_sync` 自动补列） |
 
-**测试合计 708 个断言，0 失败**（`.venv\Scripts\python.exe -m pytest -q` → 9 passed）
+**测试合计 766 个断言，0 失败**（`.venv\Scripts\python.exe -m pytest -q` → 10 passed）
 > 里面 **1 组会跳过**：战役管理的「与 `campaign_state.json` 对拍」需要真实存档，
 > 设 `GFVFW_TEST_CAM` 与 `GFVFW_TEST_STATE_JSON` 指向配套的 `.cam` 与 CamReader 输出即可跑满。
-> 上表 9 个套件相加正好 708（65+36+67+103+87+61+65+67+157），与 `pytest` 一致。
+> 上表 10 个套件相加正好 766（65+36+67+103+87+61+65+67+58+157），与 `pytest` 一致。
 
 ---
 
@@ -186,6 +187,48 @@
 > ⚠️ 时长与航程在**表单里是小时+分、海里**，入库是秒、米 ——
 > 换算只在 `web/forms.py` 一处（`parse_local_datetime` / `_secs_from_hhmm`）。
 > `web/forms.py` 也是 UTC+8 ⇄ UTC 的唯一转换点。
+
+### 账号与密码
+
+密码用 **argon2id** 单向哈希存储（`security.py`）—— **找不回来，只能改**。
+因此有两条路，缺一不可：
+
+| 场景 | 怎么做 | 需要什么 |
+|---|---|---|
+| 本人改密码 | 右上角**自己的名字** → `/account` → 填当前密码 + 新密码两次 | 记得当前密码 |
+| 忘了密码 / 账号被锁 | 运维在服务器跑 `gfvfw.cli set-password` | 服务器 shell |
+
+```bash
+# 服务器上（推荐：生成随机强密码，只打印一次）
+sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
+  .venv/bin/python -m gfvfw.cli set-password --callsign Oblivion --generate'
+
+# 或自己指定（省略 --password 会交互输入两次，不回显）
+sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
+  .venv/bin/python -m gfvfw.cli set-password --username admin'
+
+# 定位账号二选一：--username 登录名 / --callsign 呼号
+# 先看有哪些账号：
+.venv/bin/python -m gfvfw.cli list-members
+```
+
+设计要点（都有测试守着）：
+
+* **改密必须验原密码。** 仅凭登录态不够 —— 浏览器被借用或 Cookie 被窃时，
+  只凭会话就能改密码等于把账号彻底交出去。
+* **CLI 重置会同时解除登录锁定并清空失败计数。** 账号被锁时正是最需要重置的场景；
+  若只换哈希而留着 `locked_until`，运维会以为重置失败。
+  实测输出会明确写「已解锁：是」。
+* **强度策略 Web 与 CLI 共用** `security.password_problem` —— 否则会出现
+  「网页不让设的密码命令行能设」。联队是内部系统，只设 8 位下限 + 拦常见弱口令，
+  **不强制"大小写+数字+符号"**（那只会逼出 `Passw0rd!` 这类更差的密码）。
+* **改密失败不计入登录失败次数** —— 否则用户改密时打错两次原密码就被锁在门外。
+* **改密不让其他设备上的登录立即失效**：会话 Cookie 里只有用户标识，没有版本号可作废。
+  页面已**明说**这一限制，并提示怀疑被盗用时联系运维停用账号。
+* 改密与重置都写**审计**（含失败尝试），但审计里**不存密码本身**，只存时间戳。
+
+> ⚠️ `create-admin` 打印的「请立即登录并修改密码」以前是一句空话 ——
+> 当时**根本没有改密入口**。现在这句话真的能执行了。
 
 ### 已完成端到端验证（真实数据）
 
@@ -345,11 +388,12 @@ gfvfw/
     app.py             应用装配（中间件顺序、异常处理、路由挂载）
     deps.py            Principal 身份对象 + require() 权限守卫（依赖工厂！）
     templating.py      Jinja2 环境与过滤器（UTC→UTC+8、单位换算、fromjson）
-    routers/           home / auth / members / acmi / missions / sorties
-                       / campaigns / theater（战役管理）
+    routers/           home / auth / account（自助改密）/ members / acmi
+                       / missions / sorties / campaigns / theater（战役管理）
                        / stats（含飞行记录三子页）/ placeholders（仅资料查询）
     forms.py           表单解析与单位换算统一入口（UTC+8⇄UTC、时长、海里）
     templates/         base + home + login
+                       + account/password.html（账号与改密）
                        + members/* + missions/*（含 form/delete）
                        + sorties/form.html（架次编辑 + 补录）
                        + campaigns/*
@@ -397,6 +441,9 @@ tests/
   nav_selfcheck.py           导航结构/工作台只出现在三个宿主页/占位页（65 断言）
   edit_selfcheck.py          人工修正：任务编辑/删除（撤销归并）、架次编辑/删除、
                              补录、权限边界、审计留痕、软删除不丢数据（67 断言）
+  account_selfcheck.py       账号与密码：自助改密（验原密码/拒绝路径）、
+                             CLI 运维重置（含解除锁定）、Web 与 CLI 共用强度策略、
+                             只能改自己的密码（58 断言）
   campaign_theater_selfcheck.py  战役管理：坐标/LZSS/容器/权限/数据表/真实解析
                              /上报管线/易手检测/页面/底图与比例尺
                              /无 BMS 部署契约/删除存档回退（157 断言）
@@ -467,6 +514,11 @@ deploy/                上线产物（VPS 部署用，不参与本地开发）
 | 编辑/删除的权限 | 只查权限点，**从不查角色名**：`log.edit.own/any`、`log.delete`、`log.approve`、`acmi.upload.any`、`campaign.manage` | 指挥有 `log.delete`，**教官没有**（教官可改可批但不可删）—— 这类差异只有权限点能表达 |
 | 代码怎么上线 | **一条命令** `sudo deploy/update.sh`（备份→pull→依赖→重启→健康检查→失败自动回滚代码） | 手动几步必然有人漏掉备份或漏掉重启。见 DEPLOY.md 第 11 节 |
 | 换行符 | `.gitattributes` 强制 **`eol=lf`** | CRLF 传到 Linux 会让 `update.sh` 报 `bad interpreter: ...bash^M`，`Caddyfile`/`gfvfw.service` 指令也会解析失败 —— 在 Windows 上完全看不出来 |
+| 密码策略 | **不强制复杂度**，只设 8 位下限 + 常见弱口令黑名单 | 强制"大小写+数字+符号"只会逼出 `Passw0rd!`、`Abc12345` 这类更差的密码。真正的防线是 argon2id + 登录锁定 |
+| 改密是否要验原密码 | **要** | 仅凭登录态不够：浏览器被借用/Cookie 被窃时，能改密码就等于账号彻底易主 |
+| CLI 重置是否顺带解锁 | **顺带解锁 + 清失败计数** | 账号被锁时正是最需要重置的场景。只换哈希会让人以为重置失败 |
+| 改密后是否踢出其他会话 | **做不到，且明说** | 会话 Cookie 只存用户标识，没有版本号可作废。与其假装安全，不如在页面上写清并给出"联系运维停用"的路径 |
+| 改密失败是否计入登录失败次数 | **不计** | 否则用户改密时打错两次原密码就被锁在门外 |
 
 ---
 
@@ -497,6 +549,10 @@ T= 分量       [0]经度 [1]纬度 [2]海拔(m) [3]roll [4]pitch [5]yaw [6]东(
 
 # 探查某个 ACMI 的结构
 .\.venv\Scripts\python.exe scripts\acmi_probe.py "路径\xxx.zip.acmi"
+
+# 账号：改密码 / 重置密码（忘记密码时唯一的出路）
+.\.venv\Scripts\python.exe -m gfvfw.cli list-members
+.\.venv\Scripts\python.exe -m gfvfw.cli set-password --callsign Oblivion --generate
 ```
 
 服务器上（部署后）：

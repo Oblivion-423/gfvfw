@@ -221,7 +221,7 @@ sudo -u gfvfw -H bash -c '
 '
 ```
 
-这一步同时会建表并播种基础数据（军衔/机型/角色）。记下它输出的密码，**首次登录后立即改**。
+这一步同时会建表并播种基础数据（军衔/机型/角色）。
 
 ```bash
 sudo -u gfvfw -H bash -c '
@@ -229,6 +229,63 @@ sudo -u gfvfw -H bash -c '
   .venv/bin/python -m gfvfw.cli list-members
 '
 ```
+
+---
+
+## 6.1 密码怎么改（**上线前必做**）
+
+仓库自带的默认口令 `admin` / `Gfvfw-Admin-2026` 在文档里是公开的 ——
+**上线前必须换掉**。密码是 argon2id 单向哈希，**找不回来，只能改**，
+所以有两条路：
+
+| 场景 | 怎么做 |
+|---|---|
+| 本人改密码 | 登录后点右上角**自己的名字** → `/account` → 填当前密码 + 新密码两次 |
+| 忘了密码 / 账号被锁 | 运维跑下面的 CLI 命令 |
+
+### 运维重置（忘记密码时唯一的出路）
+
+```bash
+# 推荐：让系统生成随机强密码（只打印一次，记下来转告本人）
+sudo -u gfvfw -H bash -c '
+  cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a
+  .venv/bin/python -m gfvfw.cli set-password --callsign <呼号> --generate
+'
+
+# 或自己指定，不给 --password 会交互输入两次（不回显）
+sudo -u gfvfw -H bash -c '
+  cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a
+  .venv/bin/python -m gfvfw.cli set-password --username admin
+'
+```
+
+定位账号用 `--username`（登录名）或 `--callsign`（呼号）**二选一**。
+先看清有哪些账号：
+
+```bash
+sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
+  .venv/bin/python -m gfvfw.cli list-members'
+```
+
+输出长这样（会明确告诉你是否顺带解锁了账号）：
+
+```
+密码已重置：
+  用户名 : admin
+  现状态 : active
+  已解锁 : 是（此前处于登录锁定）
+  新密码 : xxxxxxxxxxxxxxxx
+
+⚠️ 上面的密码只显示这一次，请立刻转告本人并让其登录后自行修改。
+```
+
+> ⚠️ 该命令会**同时解除登录锁定并清空失败计数** —— 账号被锁时正是最需要
+> 重置密码的场景，若只换哈希而留着 `locked_until`，你会以为重置失败。
+>
+> ⚠️ 强度策略与网页端**共用同一个函数**（`security.password_problem`）：
+> 至少 8 位、不拦复杂度但拒常见弱口令。所以 CLI 也**拒绝** `password` 这类密码。
+>
+> ⚠️ `set-password` 会写审计（谁在什么时候重置了哪个账号），但**不记录密码本身**。
 
 ---
 
@@ -372,6 +429,7 @@ curl -sSI https://你的域名/login | grep -i '^set-cookie'    # 必须含 Secu
 | 9 | `systemctl list-timers gfvfw-backup.timer` | 显示下次触发时间 |
 | 10 | 审计页的 IP 不是 `127.0.0.1` | 说明 XFF 覆盖生效 |
 | 11 | 跑一次自动实况核查（见下） | 全 PASS |
+| 12 | **默认口令已改掉**（见第 6.1 步） | 用仓库里的 `Gfvfw-Admin-2026` 登录**失败** |
 
 ### 一条命令做完全部页面核查（推荐）
 

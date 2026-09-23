@@ -85,3 +85,13 @@ def test_edit_suite():
     """
     _assert_no_failures(_load("edit_selfcheck.py"), "edit")
 
+
+def test_account_suite():
+    """密码与账号：自助改密（需验原密码）、CLI 运维重置（含解除登录锁定）、
+    强度策略由 Web 与 CLI 共用、只能改自己的密码。
+
+    这条链路上线前**完全不存在** —— 密码是 argon2id 单向哈希，
+    没有改密入口时唯一出路是直接改数据库，那会绕过审计与强度校验。
+    """
+    _assert_no_failures(_load("account_selfcheck.py"), "account")
+

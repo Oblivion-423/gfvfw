@@ -32,8 +32,8 @@ from ..security import SESSION_COOKIE
 from ..services.bootstrap import ensure_schema, seed
 from .deps import LoginRequired, PermissionDenied, load_principal
 from .routers import (
-    acmi, auth, campaigns, home, members, missions, placeholders, sorties,
-    stats, theater,
+    account, acmi, auth, campaigns, home, members, missions, placeholders,
+    sorties, stats, theater,
 )
 from .templating import STATIC_DIR, render
 
@@ -112,6 +112,7 @@ def create_app() -> FastAPI:
     # ⚠️ 顺序：具体前缀在前，避免被更宽泛的路径抢占。
     app.include_router(home.router)
     app.include_router(auth.router)
+    app.include_router(account.router)
     app.include_router(members.router)
     app.include_router(acmi.router)
     app.include_router(missions.router)

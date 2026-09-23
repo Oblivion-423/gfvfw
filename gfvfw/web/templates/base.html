@@ -44,7 +44,7 @@
 
       <div class="userbox">
         {% if principal.is_authenticated %}
-          <span class="who">{{ principal.display_name }}</span>
+          <a class="who" href="/account" title="账号与密码">{{ principal.display_name }}</a>
           <span class="role">{{ principal.primary_role_name }}</span>
           <form method="post" action="/logout" style="display:inline">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

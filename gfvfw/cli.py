@@ -7,12 +7,15 @@
     .venv\\Scripts\\python.exe -m gfvfw.cli create-member --callsign Viper
     .venv\\Scripts\\python.exe -m gfvfw.cli list-members
     .venv\\Scripts\\python.exe -m gfvfw.cli grant-role --callsign Oblivion --role commander
+    .venv\\Scripts\\python.exe -m gfvfw.cli set-password --username admin --generate
     .venv\\Scripts\\python.exe -m gfvfw.cli seed          # 仅播种基础数据
 
 为什么需要它
 ------------
 联队账号采用"申请后开通"，**没有自助注册**。
 第一个管理员账号必须在命令行创建（此时系统里还没有任何能登录的人）。
+``set-password`` 则是**忘记密码时唯一的出路** —— 密码是单向哈希，
+找不回来，只能重置。
 """
 
 from __future__ import annotations
@@ -27,7 +30,8 @@ from sqlalchemy import select
 from .db import SessionLocal, engine
 from .models import Member, MemberRole, Role, User
 from .permissions import ROLE_DEFINITIONS
-from .security import hash_password
+from .security import hash_password, new_token, password_problem
+from .services.audit import record_audit
 from .services.bootstrap import ensure_schema, seed
 
 log = logging.getLogger("gfvfw.cli")
@@ -76,8 +80,11 @@ def cmd_create_admin(args) -> None:
             confirm = getpass.getpass("请再输入一次：")
             if password != confirm:
                 raise SystemExit("两次输入不一致")
-        if len(password) < 8:
-            raise SystemExit("密码至少 8 位")
+        # ⚠️ 与 Web 改密共用同一套策略（security.password_problem），
+        #    否则会出现"网页不让设的密码命令行能设"。
+        problem = password_problem(password)
+        if problem:
+            raise SystemExit(problem)
 
         member = _get_or_create_member(db, args.callsign)
         user = User(
@@ -108,6 +115,9 @@ def cmd_create_member(args) -> None:
         db.flush()
         if args.username:
             password = args.password or getpass.getpass("请输入密码：")
+            problem = password_problem(password)
+            if problem:
+                raise SystemExit(problem)
             db.add(User(username=args.username,
                         password_hash=hash_password(password),
                         status="active", member_id=member.id))
@@ -152,6 +162,74 @@ def cmd_seed(args) -> None:
     print("基础数据播种：", created)
 
 
+def cmd_set_password(args) -> None:
+    """重置某个账号的密码。
+
+    这是**忘记密码时唯一的出路** —— 密码是 argon2id 单向哈希，
+    没有任何"找回"的可能，只能由运维重置。
+    """
+    _setup()
+    if not args.username and not args.callsign:
+        raise SystemExit("必须给 --username 或 --callsign 之一")
+
+    with SessionLocal() as db:
+        if args.username:
+            user = db.scalar(select(User).where(User.username == args.username))
+            who = "用户名 %s" % args.username
+        else:
+            member = db.scalar(
+                select(Member).where(Member.callsign == args.callsign,
+                                     Member.deleted_at.is_(None)))
+            if member is None:
+                raise SystemExit("名册中找不到呼号：%s" % args.callsign)
+            user = db.scalar(select(User).where(User.member_id == member.id))
+            who = "呼号 %s" % args.callsign
+
+        if user is None:
+            raise SystemExit("找不到账号：%s" % who)
+
+        # 生成随机密码
+        if args.generate:
+            password = new_token(12)          # ~16 字符 URL 安全随机串
+        elif args.password:
+            password = args.password
+        else:
+            password = getpass.getpass("请输入新密码：")
+            confirm = getpass.getpass("请再输入一次：")
+            if password != confirm:
+                raise SystemExit("两次输入不一致")
+
+        problem = password_problem(password)
+        if problem:
+            raise SystemExit(problem)
+
+        old_status = user.status
+        user.password_hash = hash_password(password)
+        # ⚠️ 必须同时解锁：账号被锁定时正是最需要重置密码的场景，
+        #    若只改哈希而留着 locked_until，运维会以为重置失败。
+        was_locked = bool(user.locked_until)
+        user.failed_login_count = 0
+        user.locked_until = None
+
+        record_audit(db, None, "user.password.reset", "users", user.id,
+                     before={"locked": was_locked, "status": old_status},
+                     after={"status": user.status},
+                     reason=args.reason or "运维通过 CLI 重置密码")
+        db.commit()
+
+        print("\n密码已重置：")
+        print("  用户名 : %s" % user.username)
+        print("  现状态 : %s%s" % (user.status,
+                                  "" if user.status == "active" else "  ⚠️ 账号未激活，仍登录不了"))
+        if was_locked:
+            print("  已解锁 : 是（此前处于登录锁定）")
+        if args.generate or args.password:
+            print("  新密码 : %s" % password)
+            print("\n⚠️ 上面的密码只显示这一次，请立刻转告本人并让其登录后自行修改。")
+        else:
+            print("\n请让本人登录后到「账号」页自行修改。")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gfvfw.cli", description="GFVFW 运维命令")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -181,6 +259,17 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("seed", help="仅播种基础数据（军衔/机型/角色）")
     p.set_defaults(func=cmd_seed)
+
+    p = sub.add_parser("set-password",
+                       help="重置账号密码（忘记密码时唯一的出路，会自动解锁）")
+    p.add_argument("--username", default="", help="按登录名定位账号")
+    p.add_argument("--callsign", default="", help="按呼号定位账号（与 --username 二选一）")
+    p.add_argument("--password", default="",
+                   help="非交互设置密码；省略则交互输入两次")
+    p.add_argument("--generate", action="store_true",
+                   help="生成随机强密码并打印一次（推荐给运维代设初始密码）")
+    p.add_argument("--reason", default="", help="写入审计的原因")
+    p.set_defaults(func=cmd_set_password)
 
     args = parser.parse_args(argv)
     args.func(args)

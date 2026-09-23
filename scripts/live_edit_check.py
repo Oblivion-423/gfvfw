@@ -260,6 +260,32 @@ def main() -> int:
     else:
         print("  SKIP  库里没有待归并的 ACMI —— 跳过该边界（非失败）")
 
+    print("\n[10] 账号与改密页")
+    status, html = s.get("/account")
+    check("GET /account 200", status == 200, f"status={status}")
+    check("账号页含改密表单", 'action="/account/password"' in html)
+    check("账号页说明密码无法找回并给出 CLI 命令",
+          "无法找回" in html and "set-password" in html)
+    check("账号页显示当前登录名", USERNAME in html)
+    # 不含 CSRF 的改密请求必须被拒（且不能真改掉密码）
+    status, _ = s.post("/account/password",
+                       {"current_password": "x", "new_password": "y" * 12,
+                        "confirm_password": "y" * 12})
+    check("无 CSRF 改密被拒（403）", status == 403, f"status={status}")
+    # 有 CSRF 但原密码错 → 400
+    token = s.csrf("/account")
+    status, body = s.post("/account/password",
+                          {"current_password": "definitely-wrong",
+                           "new_password": "Gyrfalcon-Probe-2026",
+                           "confirm_password": "Gyrfalcon-Probe-2026",
+                           "csrf_token": token or ""})
+    check("原密码错误 → 400（不泄露更多信息）", status == 400, f"status={status}")
+    check("原密码错误有提示", "原密码不正确" in body)
+    # ★ 关键：上面的失败尝试不能把管理员自己的密码改掉、也不能锁住账号
+    status, _ = s.get("/missions")
+    check("★ 改密失败后当前会话仍可用（没被踢出/锁死）", status == 200,
+          f"status={status}")
+
     return report()
 
 

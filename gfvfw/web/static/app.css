@@ -87,7 +87,9 @@ a:hover { text-decoration: underline; }
 }
 
 .userbox { display: flex; align-items: center; gap: 12px; font-size: 13px; }
-.userbox .who { color: var(--fg); }
+/* 用户名现在是指向账号页的链接 —— 去掉下划线，靠 hover 提示可点 */
+.userbox a.who { color: var(--fg); text-decoration: none; }
+.userbox a.who:hover { text-decoration: underline; }
 .userbox .role {
   font-size: 11px; color: var(--fg-dim);
   border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px;
