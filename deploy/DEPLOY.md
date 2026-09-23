@@ -377,21 +377,37 @@ sudo -u gfvfw -H bash -c '
 ```bash
 sudo cp /srv/gfvfw/deploy/env.example /etc/gfvfw/env
 sudo chmod 600 /etc/gfvfw/env
-sudo nano /etc/gfvfw/env
 ```
 
-最少要改这三项：
+⚠️ **`env.example` 里只有 `GFVFW_SECRET_KEY` 一行需要改** ——
+其余默认值（`GFVFW_HTTPS_ONLY=true`、`GFVFW_BMS_INSTALL_PATH`、三个数据路径）
+都是为 `/srv/gfvfw` 这套部署写好的，不用动。
+
+所以**不必开编辑器**（最小化安装的 Alibaba Cloud Linux / CentOS 常常**没有
+`nano`**，会报 `-bash: nano: command not found`），直接替换那一行：
 
 ```bash
-# 生成密钥
-python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+# 生成密钥并原地替换（密钥是 urlsafe base64，只含 A-Za-z0-9-_，
+# 所以用 | 当 sed 分隔符是安全的）
+KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+sudo sed -i "s|^GFVFW_SECRET_KEY=.*|GFVFW_SECRET_KEY=${KEY}|" /etc/gfvfw/env
 ```
 
-| 变量 | 值 | 不设的后果 |
+想用编辑器也行：`sudo dnf install -y nano`，或直接用 `vi`。
+
+```bash
+# 核对结果（故意打码，别把密钥留在聊天记录/录屏里）
+awk -F= '/^GFVFW_SECRET_KEY=/{if ($2 ~ /CHANGE-ME/) print "✗ 还是占位值"; \
+         else print "✓ 密钥已设置，长度 " length($2)}' /etc/gfvfw/env
+grep -E '^(GFVFW_HTTPS_ONLY|GFVFW_BMS_INSTALL_PATH|GFVFW_DATABASE_URL)=' /etc/gfvfw/env
+ls -l /etc/gfvfw/env      # 期望 -rw------- root root
+```
+
+| 变量 | 值 | 不改的后果 |
 |---|---|---|
-| `GFVFW_SECRET_KEY` | 上面生成的随机串 | 会话/CSRF 可被伪造（默认值是 `CHANGE-ME-IN-PRODUCTION`） |
-| `GFVFW_HTTPS_ONLY` | `true` | 会话 Cookie 缺 `Secure` 属性，用户走一次 `http://` 就明文外泄 |
-| `GFVFW_BMS_INSTALL_PATH` | `/srv/gfvfw/bms-data` | `.cam` 上传会明确报错（不会写半空数据） |
+| `GFVFW_SECRET_KEY` | `secrets.token_urlsafe(48)` 生成的随机串 | 会话与 CSRF 令牌**可被伪造**（默认值是 `CHANGE-ME-…`） |
+| `GFVFW_HTTPS_ONLY` | 已是 `true`，确认别改成 false | 会话 Cookie 缺 `Secure` 属性，用户走一次 `http://` 就明文外泄 |
+| `GFVFW_BMS_INSTALL_PATH` | 已是 `/srv/gfvfw/bms-data` | `.cam` 上传会明确报错（不会写半空数据） |
 
 ---
 
