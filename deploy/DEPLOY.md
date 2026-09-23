@@ -331,6 +331,18 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw && git pull --ff-only && git log --oneli
 > 带着 CRLF 换行到 Linux，会直接报 `bad interpreter: /usr/bin/env bash^M`；
 > `Caddyfile`、`gfvfw.service` 的指令也会因 `\r` 解析失败。Windows 上完全看不出来。
 
+> ⚠️ **另一个同样"只在服务器上炸"的坑：执行位。**
+> `deploy/update.sh` 曾经在 git 里是 `100644`（没有 +x）—— Windows 不体现执行位，
+> 本地看不出来；服务器上 `sudo deploy/update.sh` 报的却是
+> **`command not found`**，看着像文件不存在。已在 git 里改成 `100755`，
+> 脚本开头也会 `chmod +x "$0"` 自愈。核对方法：
+>
+> ```bash
+> git ls-files -s deploy/update.sh     # 期望开头是 100755，不是 100644
+> ```
+>
+> 而**最保险的用法是 `sudo bash <路径>`**，它完全不依赖执行位。
+
 想核对服务器上拿到的是 LF：
 
 ```bash
@@ -876,8 +888,20 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; \
 **已纳入 git（2026 起）**，所以升级是一条命令：
 
 ```bash
-sudo /srv/gfvfw/deploy/update.sh
+sudo bash /srv/gfvfw/deploy/update.sh
 ```
+
+> ⚠️ **请养成写 `sudo bash <路径>` 的习惯，而不是 `sudo <路径>`。**
+>
+> 这条曾经真的炸过：`deploy/update.sh` 在 git 里被记成了 `100644`
+> （**没有执行位** —— 项目在 Windows 上开发，而 Windows 文件系统不体现执行位，
+> 本地怎么看都正常）。于是服务器上 `sudo /srv/gfvfw/deploy/update.sh`
+> 报的是 **`command not found`**，看着像"脚本不存在"，实际是文件不可执行，
+> 极难联想到"git 没记执行位"。
+>
+> 现在两处都修了：git 里改成 `100755`（`git pull` 会自动带上执行位），
+> 脚本开头还会 `chmod +x "$0"` 自愈一次。但 `sudo bash <路径>` 完全不依赖
+> 执行位，**永远能跑**，所以按上面那行写最保险。
 
 它按顺序做六步，**任何一步失败就停下**：
 
@@ -893,7 +917,7 @@ sudo /srv/gfvfw/deploy/update.sh
 先看它会做什么（不改任何东西）：
 
 ```bash
-sudo /srv/gfvfw/deploy/update.sh --dry-run
+sudo bash /srv/gfvfw/deploy/update.sh --dry-run
 ```
 
 > ⚠️ **代码目录对服务是只读的**（`gfvfw.service` 里 `ProtectSystem=strict`，
@@ -906,10 +930,11 @@ sudo /srv/gfvfw/deploy/update.sh --dry-run
 没有 git 时的替代（`GFVFW_RSYNC_FROM`）：
 
 ```bash
-sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.sh
+sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ bash /srv/gfvfw/deploy/update.sh
 ```
 
 ⚠️ 这条路**无法自动回滚代码**（没有版本可退），失败时只能人工处理。
+⚠️ rsync 也会丢执行位（它保留模式，但源端的模式就未必对）—— 脚本的自查会补上。
 
 ### 数据库结构变更的现状
 
@@ -1049,6 +1074,7 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 上传后解析失败、提示缺 `GFVFW_BMS_INSTALL_PATH` | 战役数据没配 | 见第 5 步 |
 | 多人同时传文件时变慢 | 应用单进程**串行**解析 | 当前设计如此；需要并发就要引入任务队列（未做） |
 | `update.sh` 报 `bad interpreter` | 代码带 CRLF 换行传到 Linux | 仓库已用 `.gitattributes` 强制 LF；若用 rsync 传则需 `unix2dos` 反向处理，见第 2 步 |
+| `sudo deploy/update.sh` 报 **`command not found`**，但 `ls` 明明看得见文件 | 文件**没有执行位**（git 里曾是 `100644`；Windows 上完全看不出来） | 先用 `sudo bash deploy/update.sh` 顶上；再 `chmod +x deploy/update.sh`。仓库里已修成 `100755` 且脚本会自愈，见第 2 步与第 11 步 |
 | `git pull` 被拒绝（`local changes`） | 有人在服务器上直接改了代码 | **不该这样**（目录对服务只读）；`git -C /srv/gfvfw status` 看改了什么，用 `git checkout -- .` 丢弃后重跑 |
 | 改了 `gfvfw.service` / `Caddyfile` 不生效 | 它们**不在** `ReadWritePaths` 里，是系统文件 | 改 `/etc/systemd/system/gfvfw.service` 与 `/etc/caddy/Caddyfile`，然后 `systemctl daemon-reload` / `systemctl reload caddy` |
 

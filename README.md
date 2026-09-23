@@ -516,7 +516,7 @@ Internet ──HTTPS(443)──▶ [Caddy] ──127.0.0.1:8000──▶ [GFVFW 
 
 | 文件 | 作用 |
 |---|---|
-| `Caddyfile` | 反向代理。**关键一行**：`header_up X-Forwarded-For {http.request.remote.host}` —— 覆盖而非追加，否则审计里的 IP 可被客户端伪造 |
+| `Caddyfile` | 反向代理。**关键一行**：`header_up X-Forwarded-For {http.request.remote.host}` —— 把该头**覆盖**为真实对端地址。实测（真机）伪造值进不来，所以审计 IP 不可伪造；但"到底是这行生效还是 Caddy 自己就丢了不可信同名头"当时没判定，所以那行**不能删**（它是把隐式保证变成显式保证）|
 | `gfvfw.service` | systemd 单元。只监听回环、`--proxy-headers`、**不加 `--workers`**、`ProtectSystem=strict`（代码目录对服务只读） |
 | `env.example` | 生产环境变量模板（`GFVFW_SECRET_KEY` / `GFVFW_HTTPS_ONLY` / `GFVFW_BMS_INSTALL_PATH` …） |
 | `backup.py` | 备份：`VACUUM INTO` 一致性快照 + 上传目录打包 + 保留策略；`--verify` 会做 `integrity_check` |
@@ -525,9 +525,16 @@ Internet ──HTTPS(443)──▶ [Caddy] ──127.0.0.1:8000──▶ [GFVFW 
 日常升级就一条命令（`--dry-run` 可先看不做）：
 
 ```bash
-sudo /srv/gfvfw/deploy/update.sh
+sudo bash /srv/gfvfw/deploy/update.sh --dry-run   # 先看它会做什么
+sudo bash /srv/gfvfw/deploy/update.sh             # 真升级
 ```
 
+> ⚠️ **写 `sudo bash <路径>`，不要写 `sudo <路径>`。**
+> 后者依赖文件的执行位，而执行位在 Windows 上完全看不出来 —— 这个仓库真的
+> 因此炸过一次：`deploy/update.sh` 在 git 里是 `100644`（没有 +x），服务器上
+> 报的是 `command not found`，看着像脚本不存在。现在 git 里已改成 `100755`，
+> 脚本开头也会 `chmod +x "$0"` 自愈；但 `sudo bash` 形式**永远能跑**。
+>
 > ⚠️ 因为 `ProtectSystem=strict` + `ReadWritePaths=/srv/gfvfw/var`，
 > **不能在服务器上直接编辑代码** —— 必须「本地改 → push → 服务器跑 update.sh」。
 > 这是故意的加固：服务器上的手改会在下次 `git pull` 时冲突或丢失。
@@ -780,7 +787,7 @@ deploy/                上线产物（VPS 部署用，不参与本地开发）
 | 人工改过的架次要不要标记 | **要**：`data_confidence='estimated'` + 页面「手动」徽标 + `edited_by`/`edit_note` | 否则人工估算值与 ACMI 解析结果在页面上无法区分，统计失去可信度 |
 | 任务时间窗编辑是否改变「任务时长」 | **不改变** | 任务时长由各架次在空区间的并集算出（多人同飞只算一次）。时间窗是元数据。编辑页上已明说，否则用户会以为改了时间就改了时长 |
 | 编辑/删除的权限 | 只查权限点，**从不查角色名**：`log.edit.own/any`、`log.delete`、`log.approve`、`acmi.upload.any`、`campaign.manage` | 指挥有 `log.delete`，**教官没有**（教官可改可批但不可删）—— 这类差异只有权限点能表达 |
-| 代码怎么上线 | **一条命令** `sudo deploy/update.sh`（备份→pull→依赖→重启→健康检查→失败自动回滚代码） | 手动几步必然有人漏掉备份或漏掉重启。见 DEPLOY.md 第 11 节 |
+| 代码怎么上线 | **一条命令** `sudo bash deploy/update.sh`（备份→pull→依赖→重启→健康检查→失败自动回滚代码） | 手动几步必然有人漏掉备份或漏掉重启。见 DEPLOY.md 第 11 节 |
 | 换行符 | `.gitattributes` 强制 **`eol=lf`** | CRLF 传到 Linux 会让 `update.sh` 报 `bad interpreter: ...bash^M`，`Caddyfile`/`gfvfw.service` 指令也会解析失败 —— 在 Windows 上完全看不出来 |
 | 密码策略 | **不强制复杂度**，只设 8 位下限 + 常见弱口令黑名单 | 强制"大小写+数字+符号"只会逼出 `Passw0rd!`、`Abc12345` 这类更差的密码。真正的防线是 argon2id + 登录锁定 |
 | 改密是否要验原密码 | **要** | 仅凭登录态不够：浏览器被借用/Cookie 被窃时，能改密码就等于账号彻底易主 |
