@@ -1059,6 +1059,15 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
   `gfvfw.cli create-member` 建成员 + 账号，他会立刻是队员身份；
   也可以先建 `pending` 账号让他自己登录，再在入队审批页提升 ——
   **只注册、没提交申请的游客同样会出现在审批列表里**，可以直接提升。
+* **想直接在网页上开一个队员账号**：`https://gfvfw.top/enroll`。
+  这是一个**隐藏页** —— 不在导航里，只能靠链接进入（这一行就是那个链接，
+  自己收好）。它要求你已用**有 `application.review` 权限的账号**登录
+  （owner 与指挥都有），否则匿名会被弹到登录页、游客与普通队员看到 403。
+  两种用法：**给名册里已有、但还没有账号的队员补一个账号**（下拉里只列
+  这类人），或者**当场新建一个队员**（同时建名册行 + 账号 + 队员角色）。
+  页面不提供"选角色" —— 要授权请用入队审批页或 `grant-role`。
+  > 链接本身**不是**凭证：知道这个地址的人，没有对应权限照样进不来；
+  > 就算地址传出去了也不构成风险。真正的边界始终是权限点。
 * **拒绝会停用账号**（不是删除）。同一个 IP 每天最多**注册 5 个账号**，
   有人被这道闸拦住时会看到明确提示 —— 联队集体报名请让他们错开或找你手工开号。
 * **已登录的人不能再注册第二个账号**（会被送回 `/apply`），
@@ -1098,6 +1107,8 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 上传 `.cam` 报 **Internal Server Error**（页面只有一行 500） | 两个问题叠加：① `.cam` 里**未初始化的实体槽位**是全 1 位模式，按 f32 读恰好是 **NaN**；SQLite 把 NaN 当 NULL，撞上 `campaign_units.z` 的 `NOT NULL` ⟹ `IntegrityError`。② 当时的失败处理**没有先回滚**就那这个脏会话去查战役列表 ⟹ `PendingRollbackError` 把真因盖掉，用户只看到 500 | 已修：所有浮点读取器与入库前兜底都把非有限值收敛成 `0.0`；所有 `except` 分支**先 `db.rollback()` 再渲染**，所以现在会显示「解析失败：`NOT NULL constraint failed: campaign_units.z`」这样的可读提示（HTTP 400）。日志里搜得到：`journalctl -u gfvfw \| grep campaign_units`。若仍出现 500，页面会给出**错误编号**，用 `journalctl -u gfvfw \| grep <错误编号>` 取完整堆栈 |
 | 上传 `.cam` 成功但页面**没有单位/目标点**，或出现「坐标越界」「entityType 解析失败」告警 | 服务器缺 **BMS 剧场数据**（`GFVFW_BMS_INSTALL_PATH` 指向的目录） | 见第 5 步。`.uni` 的单位流**靠类表路由**：类表缺失时所有记录都会退化成"当 Objective 解析"，流一旦错位就会读出垃圾记录（实测能读出 `unit_id=0xFFFF0001`、坐标 7103 这种不可能的值）。核对：`ls -la /srv/gfvfw/bms-data/ && du -sh /srv/gfvfw/bms-data/`，应有 47.9 MB 量级且**别漏 `Theater.txt`** |
 | 想知道服务器上传链路到底行不行 | —— | 在开发机上跑 `scripts/cam_upload_probe.py http://你的域名 <密码> <某个.cam>`：真的走 HTTP 上传，只在出现服务器异常页时失败。⚠️ 它**会真的写一条存档记录**，先拿探针服务器试 |
+| 找不到"直接开队员账号"的入口 | 它是**故意**不进导航的隐藏页 | 直接访问 `/enroll`（需已登录且有 `application.review`）。见第 12 节「上线后怎么拉人入队」 |
+| 打开 `/enroll` 被弹到登录页 / 看到 403 | 链接**不是**凭证，权限才是 | 匿名会被送到登录页；游客与普通队员是 403（**这是正确行为**，不是 Bug）。用 owner 或指挥账号登录即可 |
 
 ⚠️ **不要给服务加 `--workers N`**：SQLite 是单写者，多进程会写冲突。
 本项目所有缓存（剧场数据、解析状态）也都是按单进程设计的。
