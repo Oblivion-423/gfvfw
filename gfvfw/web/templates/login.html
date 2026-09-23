@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}登录 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="auth-wrap">
+  <h1>登录</h1>
+
+  <div class="panel">
+    <form method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="field" style="margin-bottom:14px">
+        <label for="username">用户名</label>
+        <input type="text" id="username" name="username" required autofocus
+               autocomplete="username" value="{{ username or '' }}">
+      </div>
+
+      <div class="field" style="margin-bottom:6px">
+        <label for="password">密码</label>
+        <input type="password" id="password" name="password" required
+               autocomplete="current-password">
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit">登录</button>
+        {% if next_url %}
+          <input type="hidden" name="next" value="{{ next_url }}">
+        {% endif %}
+      </div>
+    </form>
+  </div>
+
+  <p class="muted small" style="text-align:center">
+    账号由管理员开通。联队采用<strong>申请后开通</strong>的方式，
+    请先在公开页面提交入队申请。
+  </p>
+</div>
+{% endblock %}

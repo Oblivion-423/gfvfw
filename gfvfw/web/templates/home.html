@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}概览 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>概览</h1>
+    <div class="sub">{{ SITE_NAME_EN }}</div>
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">系统状态</h2>
+  <div class="stat-row">
+    <div class="stat">
+      <span class="v">{{ stats.members_total }}</span>
+      <span class="k">名册成员</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ stats.members_active }}</span>
+      <span class="k">现役</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ stats.missions }}</span>
+      <span class="k">任务</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ stats.sorties }}</span>
+      <span class="k">架次</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ stats.acmi_files }}</span>
+      <span class="k">已归档 ACMI</span>
+    </div>
+  </div>
+</div>
+
+{% if stats.sorties == 0 and stats.acmi_files == 0 %}
+<div class="flash info">
+  <strong>系统从零开始。</strong>
+  按联队决定，<strong>不导入历史文件</strong>，飞行日志从新上传的 ACMI 开始累积。
+  <br>当前为空属正常状态 —— 数据录入入口已临时隐藏，见下方说明。
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2 style="margin-top:0">功能导航</h2>
+  <table>
+    <thead><tr><th style="width:130px">菜单</th><th>说明</th>
+               <th style="width:100px">状态</th></tr></thead>
+    <tbody>
+      <tr><td><a href="/">概览</a></td><td>系统状态与使用指引</td>
+          <td><span class="badge ok">可用</span></td></tr>
+      <tr><td><a href="/members">成员</a></td><td>名册、军衔、资质、个人档案</td>
+          <td><span class="badge ok">可用</span></td></tr>
+      <tr><td><a href="/theater">战役管理</a></td>
+          <td>解析 BMS 战役存档：战场态势、兵力对比、目标点归属、战役进程</td>
+          <td><span class="badge ok">可用</span></td></tr>
+      <tr><td><a href="/log/campaign">飞行记录</a></td>
+          <td>战役记录 / 训练记录 / 飞行员个人记录</td>
+          <td><span class="badge ok">可用</span></td></tr>
+      <tr><td><a href="/library">资料查询</a></td>
+          <td>计划支持手册、检查单、地图、涂装、教程</td>
+          <td><span class="badge warn">待实现</span></td></tr>
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-bottom:0">
+    进阶入口：<a href="/stats">统计</a>、<a href="/log">高级查询</a>。
+  </p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">关于数据录入</h2>
+  <p class="small" style="margin-top:-6px">
+    <strong>ACMI 导入、飞行员认领、归并确认的入口已临时从导航移除</strong>（按联队要求）。
+    这三个功能与其中的数据都仍然保留，只是界面上暂时不显示入口，
+    后续需要时可以直接恢复。
+  </p>
+  <p class="small muted" style="margin-bottom:0">
+    因此当前"飞行记录"中显示的是已经入库的历史数据，暂时不会新增。
+  </p>
+</div>
+
+{% if not principal.is_active_user %}
+<div class="panel">
+  <h3 style="margin-top:0">当前身份</h3>
+  <p class="muted small" style="margin:0">
+    {% if principal.is_authenticated %}
+      你已登录，但账号状态为
+      <span class="badge warn">{{ principal.user.status }}</span>，
+      暂时只能查看公开内容，无法进入内部数据。
+    {% else %}
+      你以<strong>访客</strong>身份浏览，仅能看到公开内容。
+      <a href="/login">登录</a>后可查看内部数据。
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+{% endblock %}

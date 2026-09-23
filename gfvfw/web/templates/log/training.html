@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}训练记录 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>训练记录</h1>
+    <div class="sub">
+      训练类任务　·　时长：小时/分　·　航程：海里（NM）
+    </div>
+  </div>
+  <div class="row">
+    <a class="btn ghost" href="/log/campaign">战役记录</a>
+    <a class="btn ghost" href="/log/pilots">个人记录</a>
+  </div>
+</div>
+
+<form method="get" action="/log/training" class="panel tight">
+  <div class="row">
+    <div class="field" style="min-width:150px">
+      <label for="date_from">起始（UTC+8）</label>
+      <input type="date" id="date_from" name="date_from" value="{{ q.date_from }}">
+    </div>
+    <div class="field" style="min-width:150px">
+      <label for="date_to">结束（UTC+8）</label>
+      <input type="date" id="date_to" name="date_to" value="{{ q.date_to }}">
+    </div>
+    <div class="field" style="min-width:200px">
+      <label for="include_campaign">战役内的训练</label>
+      <select id="include_campaign" name="include_campaign">
+        <option value="0" {{ 'selected' if not q.include_campaign else '' }}>不包含（默认）</option>
+        <option value="1" {{ 'selected' if q.include_campaign else '' }}>包含</option>
+      </select>
+      <span class="hint">战役内的训练属于战役战史，默认在"战役记录"中查看</span>
+    </div>
+    <div class="spacer"></div>
+    <div class="row" style="align-self:flex-end">
+      <button class="btn" type="submit">筛选</button>
+      <a class="btn ghost" href="/log/training">重置</a>
+    </div>
+  </div>
+</form>
+
+{% if acmi_any %}{% include "acmi/_wizard.html" %}{% endif %}
+
+{% if totals.missions %}
+<div class="panel tight">
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ totals.missions }}</span><span class="k">训练任务数</span></div>
+    <div class="stat"><span class="v">{{ totals.sorties }}</span><span class="k">总架次</span></div>
+    <div class="stat"><span class="v">{{ totals.flight_seconds|dur }}</span><span class="k">任务总时长</span></div>
+    <div class="stat"><span class="v">{{ totals.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
+    <div class="stat"><span class="v">{{ totals.pilots }}</span><span class="k">参与成员</span></div>
+  </div>
+  <div class="small muted" style="margin-top:8px">
+    时长按<b>任务</b>计 —— 多人飞同一任务只算一次（与下方每行一致）。
+  </div>
+</div>
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <table>
+    <thead>
+      <tr><th>任务时间（UTC+8）</th><th>任务</th><th>参战</th>
+          <th class="num">架次</th><th class="num">任务时长</th><th class="num">航程</th><th>ACMI</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      {% set m = r.mission %}
+      <tr>
+        <td class="small nowrap">{{ m.started_at|datetime }}</td>
+        <td><a href="/missions/{{ m.id }}">{{ m.name }}</a></td>
+        <td class="small">
+          {% for name, unclaimed in r.callsigns %}
+            {% if unclaimed %}<span class="badge warn">{{ name }}</span>
+            {% else %}<span class="badge ok">{{ name }}</span>{% endif %}
+          {% endfor %}
+          {% if not r.callsigns %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ r.sorties }}</td>
+        <td class="num">{{ r.flight_seconds|dur }}</td>
+        <td class="num">{{ r.distance_nm|round|int }} NM</td>
+        <td><span class="badge {{ 'ok' if m.acmi_completeness == 'complete' else ('warn' if m.acmi_completeness == 'partial' else 'danger') }}">
+          {{ {'complete':'完整','partial':'部分','missing':'缺失','unknown':'未知'}.get(m.acmi_completeness, m.acmi_completeness) }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="small muted">
+  绿色为已认领成员，黄色为未认领的名字（数据已入库但不计入个人成绩）。
+</p>
+
+{% else %}
+<div class="empty">
+  还没有训练记录。<br>
+  <span class="small">
+    上传 ACMI 后在归并确认页把任务类型选为"训练"即可。
+    {% if not q.include_campaign %}
+      <br>若训练任务已归入战役，可把上方"战役内的训练"改为"包含"。
+    {% endif %}
+  </span>
+  <br><span class="small muted">（数据录入入口已临时隐藏）</span>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,443 @@
+{# ==========================================================================
+   ACMI 工作台 —— 内嵌在业务页面里的「上传 → 认领 → 归并」区块。
+
+   ⚠️ 不要在宿主页面里各写一份：三处入口
+       飞行记录 · 战役记录   /log/campaign
+       飞行记录 · 训练记录   /log/training
+       战役管理 · 战役详情   /theater/{id}
+      都 include 本文件，行为必须完全一致。
+   需要的上下文见 gfvfw/web/routers/acmi.py::wizard_context
+   ========================================================================== #}
+{% set wb_order = ['upload', 'claim', 'merge'] %}
+{% set wb_labels = {'upload': '上传文件', 'claim': '认领飞行员', 'merge': '归并确认'} %}
+{% macro wb_url(stage) %}{{ acmi_return_to }}?acmi={{ stage }}{% if acmi_campaign_id %}&campaign_id={{ acmi_campaign_id }}{% endif %}{% if acmi_extra_q %}&{{ acmi_extra_q }}{% endif %}{% endmacro %}
+
+<details class="panel wb" id="acmiWorkbench"{% if acmi_open %} open{% endif %}>
+  <summary>
+    <span class="wb-title">ACMI 工作台</span>
+    <span class="muted small">上传 → 认领 → 归并</span>
+    {% if acmi_pending_files %}
+      <span class="badge warn">{{ acmi_pending_files }} 份待归并</span>
+    {% endif %}
+    {% if acmi_unclaimed_total %}
+      <span class="badge warn">{{ acmi_unclaimed_total }} 个名字待认领</span>
+    {% endif %}
+    {% if not acmi_pending_files and not acmi_unclaimed_total %}
+      <span class="badge ok">无待办</span>
+    {% endif %}
+  </summary>
+
+  <div class="wb-body">
+    {% if acmi_did_message %}
+      <div class="flash ok">
+        {{ acmi_did_message }}{% if acmi_count %}（{{ acmi_count }} 个文件）{% endif %}
+      </div>
+    {% endif %}
+
+    <div class="panel tight">
+      <div class="steps">
+        {% for k in wb_order %}
+          <a class="step {{ 'done' if wb_order.index(k) < wb_order.index(acmi_stage) else '' }} {{ 'current' if k == acmi_stage else '' }}"
+             href="{{ wb_url(k) }}"><b>{{ loop.index }}</b>{{ wb_labels[k] }}</a>
+          {% if not loop.last %}<span class="step-sep">→</span>{% endif %}
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ---------------------------------------------------------------- 上传 #}
+    {% if acmi_stage == 'upload' %}
+      {% if acmi_can_upload %}
+      <div class="panel">
+        <h3 style="margin-top:0">选择文件</h3>
+        <form method="post" action="/acmi/upload" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="return_to" value="{{ acmi_return_to }}">
+          <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+
+          <div class="field">
+            <label for="acmiFiles">ACMI 文件（可多选）</label>
+            <input type="file" id="acmiFiles" name="files" multiple required
+                   accept=".acmi,.zip,application/zip">
+            <span class="hint">
+              支持 <code>.zip.acmi</code>（实际是 ZIP 容器）与裸 <code>.acmi</code>；
+              单个文件上限 {{ acmi_max_mb }} MB。
+              同一场任务的多人录制<b>一次全选</b>，下一步一起归并。
+            </span>
+          </div>
+
+          <div class="flash warn">
+            <strong>请只上传本次任务的文件。</strong>
+            按联队决定，<strong>不导入历史文件</strong> —— 补传旧文件会造成数据半量，
+            使排行榜与总时长失真。
+          </div>
+
+          <div class="actions">
+            <button class="btn" type="submit">上传并解析</button>
+          </div>
+        </form>
+      </div>
+      {% else %}
+      <div class="flash info">你没有上传 ACMI 的权限，请联系管理员。</div>
+      {% endif %}
+
+      {% if acmi_recent %}
+      <div class="panel">
+        <h3 style="margin-top:0">最近的归档文件</h3>
+        <table>
+          <thead>
+            <tr><th>文件</th><th>解析</th><th>归属</th>
+                <th class="num">飞行员</th><th>上传者</th><th>上传时间</th>
+                {% if acmi_can_delete %}<th></th>{% endif %}</tr>
+          </thead>
+          <tbody>
+            {% for f in acmi_recent %}
+            <tr>
+              <td class="small">{{ f.original_filename }}</td>
+              <td>
+                <span class="badge {{ 'ok' if f.parse_status == 'parsed' else ('danger' if f.parse_status == 'failed' else '') }}">
+                  {{ acmi_parse_labels.get(f.parse_status, f.parse_status) }}</span>
+              </td>
+              <td class="small">
+                {% if f.mission_id %}<span class="badge accent">已归属任务</span>
+                {% elif f.batch_id %}<span class="badge warn">待确认</span>
+                {% else %}<span class="muted">未归并</span>{% endif %}
+              </td>
+              <td class="num">{{ f.pilot_count }}</td>
+              <td class="small muted">{{ f.uploader or '—' }}</td>
+              <td class="small muted">{{ f.created_at|datetime }}</td>
+              {% if acmi_can_delete %}
+              <td>
+                {% if f.mission_id %}
+                  <span class="small muted"
+                        title="已归并的文件不能直接删；请先到任务详情页删除任务，它会拆回待归并">已归并</span>
+                {% else %}
+                  <form method="post" action="/acmi/{{ f.id }}/delete"
+                        onsubmit="return confirm('删除 {{ f.original_filename }}？磁盘原件会一并删除，此操作不可撤销。')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="return_to" value="{{ acmi_return_to }}">
+                    <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+                    <button class="btn danger" type="submit">删除</button>
+                  </form>
+                {% endif %}
+              </td>
+              {% endif %}
+            </tr>
+            {% if f.parse_error %}
+            <tr><td colspan="6" class="small" style="color:var(--danger)">
+              解析错误：{{ f.parse_error }}</td></tr>
+            {% endif %}
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+    {# ---------------------------------------------------------------- 认领 #}
+    {% elif acmi_stage == 'claim' %}
+      {% if not acmi_can_claim %}
+        <div class="flash info">你没有认领飞行员名的权限，请联系管理员。</div>
+      {% else %}
+
+      {% if acmi_unclaimed %}
+      <div class="panel">
+        <h3 style="margin-top:0">待认领（{{ acmi_unclaimed|length }} 个）</h3>
+        <p class="small muted" style="margin-top:-6px">
+          这些名字出现在 ACMI 中但未绑定名册成员。<strong>未认领的架次不会进入统计</strong>。
+          若某个名字其实是 AI 或外部人员，可<b>忽略</b>它 —— 忽略后不再出现在此列表。
+        </p>
+        <table>
+          <thead>
+            <tr><th>ACMI 中的名字</th><th class="num">出现次数</th>
+                <th>示例机型</th><th>首次出现</th><th>认领为</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for u in acmi_unclaimed %}
+            <tr>
+              <td><strong>{{ u.raw_name }}</strong></td>
+              <td class="num">{{ u.count }}</td>
+              <td class="small muted">{{ u.aircraft or '—' }}</td>
+              <td class="small muted">{{ u.first_seen|datetime }}</td>
+              <td>
+                <form method="post" action="/acmi/claim" class="row" style="gap:6px">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="return_to" value="{{ acmi_return_to }}">
+                  <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+                  <input type="hidden" name="raw_name" value="{{ u.raw_name }}">
+                  <select name="member_id" required style="min-width:150px">
+                    <option value="">选择成员…</option>
+                    {% for m in acmi_members %}
+                      <option value="{{ m.id }}">{{ m.callsign }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn" type="submit">认领</button>
+                </form>
+              </td>
+              <td>
+                <form method="post" action="/acmi/ignore"
+                      onsubmit="return confirm('把 {{ u.raw_name }} 标记为非联队人员？它将不再进入统计。')">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="return_to" value="{{ acmi_return_to }}">
+                  <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+                  <input type="hidden" name="raw_name" value="{{ u.raw_name }}">
+                  <button class="btn ghost" type="submit">忽略</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if not acmi_members %}
+          <div class="flash warn" style="margin-top:12px">
+            名册还是空的，请先到 <a href="/members">成员名册</a> 建立成员。
+          </div>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="panel"><div class="empty">没有待认领的飞行员名。</div></div>
+      {% endif %}
+
+      {% if acmi_claimed %}
+      <div class="panel">
+        <h3 style="margin-top:0">已认领（{{ acmi_claimed|length }} 个）</h3>
+        <table>
+          <thead><tr><th>ACMI 中的名字</th><th>对应成员</th><th>置信度</th><th></th></tr></thead>
+          <tbody>
+            {% for c in acmi_claimed %}
+            <tr>
+              <td>{{ c.raw_name }}</td>
+              <td><a href="/members/{{ c.member_id }}">{{ c.callsign }}</a></td>
+              <td><span class="badge {{ 'ok' if c.confidence == 'exact' else '' }}">{{ c.confidence }}</span></td>
+              <td>
+                <form method="post" action="/acmi/claim/{{ c.id }}/revoke"
+                      onsubmit="return confirm('撤销该认领？相关架次将退回未认领状态。')">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="return_to" value="{{ acmi_return_to }}">
+                  <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+                  <button class="btn danger" type="submit">撤销</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if acmi_ignored %}
+      <div class="panel">
+        <h3 style="margin-top:0">已忽略（{{ acmi_ignored|length }} 个）</h3>
+        <p class="small muted" style="margin-top:-6px">标记为外部人员或 AI，不进入统计。</p>
+        <table>
+          <thead><tr><th>名字</th><th></th></tr></thead>
+          <tbody>
+            {% for i in acmi_ignored %}
+            <tr>
+              <td>{{ i.pilot_name }}</td>
+              <td>
+                <form method="post" action="/acmi/claim/{{ i.id }}/unignore">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="return_to" value="{{ acmi_return_to }}">
+                  <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+                  <button class="btn ghost" type="submit">恢复待认领</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% endif %}
+
+    {# ---------------------------------------------------------------- 归并 #}
+    {% elif acmi_stage == 'merge' %}
+      {% if not acmi_can_merge %}
+        <div class="flash info">你没有归并确认的权限，请联系管理员。</div>
+      {% elif acmi_files %}
+
+      <div class="flash info">
+        <strong>怎么选？</strong>
+        同一场任务里，每个成员各自录制会得到多份 ACMI。
+        勾选<b>时间窗相互重叠</b>的那几份即可合成一次任务。
+        拿不准就只选一份 —— 一份文件也能单独成任务，之后无法再合并，
+        所以<b>宁可先分开、确认清楚再合</b>。
+      </div>
+
+      {% if acmi_unclaimed_total %}
+      <div class="flash warn">
+        还有 <strong>{{ acmi_unclaimed_total }}</strong> 个飞行员名未认领。
+        <b>未认领的架次不会进入统计</b>（仍会出现在任务详情里，标注为"未认领"）。
+        <a href="{{ wb_url('claim') }}">先去认领</a>。
+      </div>
+      {% endif %}
+
+      <form method="post" action="/acmi/merge" id="acmiMergeForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+        <div class="panel" style="padding:0;overflow:hidden">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:38px"><input type="checkbox" id="acmiCheckAll"></th>
+                <th>文件</th>
+                <th>录制时间窗（{{ DISPLAY_TZ_LABEL }}）</th>
+                <th class="num">时长</th>
+                <th class="num">大小</th>
+                <th>飞行员（<span style="color:var(--ok)">已认领</span> / <span style="color:var(--warn)">未认领</span>）</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for f in acmi_files %}
+              <tr>
+                <td><input type="checkbox" name="file_ids" value="{{ f.id }}"
+                           class="acmi-filecheck"
+                           data-start="{{ f.start.isoformat() if f.start else '' }}"></td>
+                <td class="small">{{ f.filename }}</td>
+                <td class="small nowrap">
+                  {% if f.start %}{{ f.start|datetime }} → {{ f.end|time }}
+                  {% else %}<span class="muted">无时间信息</span>{% endif %}
+                </td>
+                <td class="num">{{ f.duration|dur }}</td>
+                <td class="num">{{ f.size|filesize }}</td>
+                <td class="small">
+                  {% for p in f.claimed %}<span class="badge ok">{{ p }}</span> {% endfor %}
+                  {% for p in f.unclaimed %}<span class="badge warn">{{ p }}</span> {% endfor %}
+                  {% if not f.pilots %}<span class="muted">无飞行员</span>{% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <h3 style="margin-top:0">任务信息</h3>
+          <div class="form-grid">
+            <div class="field">
+              <label for="acmiMissionName">任务名称</label>
+              <input type="text" id="acmiMissionName" name="mission_name" maxlength="128"
+                     placeholder="留空则按时间自动命名">
+            </div>
+
+            {% if acmi_lock_mission_type %}
+            <div class="field">
+              <label>任务类型</label>
+              <div class="small">训练（本页固定）</div>
+              <input type="hidden" name="mission_type" value="training">
+            </div>
+            {% else %}
+            <div class="field">
+              <label for="acmiMissionType">任务类型</label>
+              <select id="acmiMissionType" name="mission_type">
+                {% for code, label in [
+                  ('training','训练'), ('patrol','巡逻'), ('cap','战斗空中巡逻'),
+                  ('intercept','截击'), ('escort','护航'), ('strike','对地打击'),
+                  ('sead','压制敌防空'), ('cas','近距空中支援'), ('recon','侦察'),
+                  ('transport','运输'), ('other','其他')] %}
+                  <option value="{{ code }}" {{ 'selected' if code == acmi_default_mission_type else '' }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endif %}
+
+            {% if acmi_lock_campaign %}
+            <div class="field">
+              <label>归属战役</label>
+              <div class="small">
+                {% if acmi_campaign_label %}
+                  归入战役：<strong>{{ acmi_campaign_label }}</strong>
+                {% else %}
+                  记为<strong>日常训练</strong>（不归入任何战役）
+                {% endif %}
+              </div>
+              <input type="hidden" name="campaign_id" value="{{ acmi_campaign_id }}">
+            </div>
+            {% else %}
+            <div class="field">
+              <label for="acmiCampaign">归属战役</label>
+              <select id="acmiCampaign" name="campaign_id">
+                <option value="">（不归入战役 —— 记为日常训练）</option>
+                {% for c in acmi_campaigns %}
+                  <option value="{{ c.id }}" {{ 'selected' if c.id == acmi_campaign_id else '' }}>{{ c.name }}</option>
+                {% endfor %}
+              </select>
+              <span class="hint">选中的战役会立刻收到这次任务，无需事后再归入。</span>
+            </div>
+            {% endif %}
+
+            <div class="field">
+              <label for="acmiVisibility">可见性</label>
+              <select id="acmiVisibility" name="visibility">
+                <option value="members" selected>内部（仅成员可见）</option>
+                <option value="public">公开（可作对外战报）</option>
+                <option value="command">指挥层（仅管理层可见）</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn" type="submit" id="acmiSubmit" disabled>确认归并并创建任务</button>
+            <span class="small muted" id="acmiHint">请先在上方勾选文件</span>
+          </div>
+        </div>
+      </form>
+
+      <script>
+      (function () {
+        var form = document.getElementById('acmiMergeForm');
+        if (!form) { return; }
+        var checks = Array.prototype.slice.call(form.querySelectorAll('.acmi-filecheck'));
+        var all = document.getElementById('acmiCheckAll');
+        var btn = document.getElementById('acmiSubmit');
+        var hint = document.getElementById('acmiHint');
+
+        function refresh() {
+          var n = checks.filter(function (c) { return c.checked; }).length;
+          btn.disabled = n === 0;
+          if (n === 0) {
+            hint.textContent = '请先在上方勾选文件';
+          } else if (n === 1) {
+            hint.textContent = '将创建 1 条任务（1 份文件）';
+          } else {
+            var starts = checks.filter(function (c) { return c.checked && c.dataset.start; })
+                               .map(function (c) { return new Date(c.dataset.start); });
+            if (starts.length >= 2) {
+              var span = (Math.max.apply(null, starts) - Math.min.apply(null, starts)) / 60000;
+              hint.textContent = '将把 ' + n + ' 份文件合成 1 条任务，录制起点相差 '
+                               + span.toFixed(0) + ' 分钟'
+                               + (span > 120 ? '　⚠️ 跨度过大，可能不是同一次任务' : '');
+            } else {
+              hint.textContent = '将把 ' + n + ' 份文件合成 1 条任务';
+            }
+          }
+          if (all) {
+            all.checked = n === checks.length && checks.length > 0;
+            all.indeterminate = n > 0 && n < checks.length;
+          }
+        }
+
+        if (all) {
+          all.addEventListener('change', function () {
+            checks.forEach(function (c) { c.checked = all.checked; });
+            refresh();
+          });
+        }
+        checks.forEach(function (c) { c.addEventListener('change', refresh); });
+        refresh();
+      })();
+      </script>
+
+      {% else %}
+      <div class="panel">
+        <div class="empty">
+          没有待归并的文件。
+          <br><br>
+          <a class="btn" href="{{ wb_url('upload') }}">去上传 ACMI</a>
+          <span class="small muted">（已归属任务的文件不会出现在这里）</span>
+        </div>
+      </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</details>

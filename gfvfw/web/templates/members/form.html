@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}{{ '编辑成员' if member else '新增成员' }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ '编辑成员' if member else '新增成员' }}</h1>
+    <div class="sub">
+      {% if member %}呼号 {{ member.callsign }}{% else %}呼号是唯一的业务主键，请谨慎填写{% endif %}
+    </div>
+  </div>
+  <a class="btn ghost" href="{{ '/members/' ~ member.id if member else '/members' }}">返回</a>
+</div>
+
+<form method="post"
+      action="{{ '/members/' ~ member.id ~ '/edit' if member else '/members/new' }}"
+      class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <h2 style="margin-top:0">基本信息</h2>
+  <div class="form-grid">
+    <div class="field">
+      <label for="callsign">呼号 <span class="badge danger">必填</span></label>
+      <input type="text" id="callsign" name="callsign" required maxlength="64"
+             value="{{ form.callsign or '' }}">
+      <span class="hint">ACMI 里的飞行员名会按此认领，请与游戏内保持一致</span>
+    </div>
+
+    <div class="field">
+      <label for="status">状态</label>
+      <select id="status" name="status">
+        {% for code, label in status_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if form.status == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="rank_id">军衔</label>
+      <select id="rank_id" name="rank_id">
+        <option value="">（未设置）</option>
+        {% for r in ranks %}
+          <option value="{{ r.id }}" {{ 'selected' if form.rank_id == r.id else '' }}>
+            {{ r.level }} · {{ r.name }}（{{ r.name_en }}）
+          </option>
+        {% endfor %}
+      </select>
+      <span class="hint">军衔与资质独立；此处以 BMS Logbook 口径为准</span>
+    </div>
+
+    <div class="field">
+      <label for="joined_at">入队日期</label>
+      <input type="date" id="joined_at" name="joined_at" value="{{ form.joined_at or '' }}">
+    </div>
+
+    <div class="field">
+      <label for="left_at">离队日期</label>
+      <input type="date" id="left_at" name="left_at" value="{{ form.left_at or '' }}">
+      <span class="hint">仅退役/离队时填写</span>
+    </div>
+
+    <div class="field">
+      <label for="visibility">档案可见性</label>
+      <select id="visibility" name="visibility">
+        {% for code, label in visibility_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if form.visibility == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field full">
+      <label for="bio">简介</label>
+      <textarea id="bio" name="bio" maxlength="2000">{{ form.bio or '' }}</textarea>
+      <span class="hint">🔒 公开可见；系统不收集真实姓名、联系方式、住址等信息</span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">{{ '保存修改' if member else '创建成员' }}</button>
+    <a class="btn ghost" href="{{ '/members/' ~ member.id if member else '/members' }}">取消</a>
+  </div>
+</form>
+{% endblock %}

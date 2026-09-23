@@ -1,0 +1,64 @@
+; ==========================================================================
+; GFVFW 应用 systemd 单元
+;
+; 安装：
+;   sudo cp deploy/gfvfw.service /etc/systemd/system/
+;   sudo systemctl daemon-reload
+;   sudo systemctl enable --now gfvfw
+;
+; 环境变量（含密钥）放在 /etc/gfvfw/env，见 deploy/env.example。
+; 该文件权限应为 600、属主 root —— 密钥不进单元文件、更不进代码仓库。
+; ==========================================================================
+
+[Unit]
+Description=GFVFW 矛隼虚拟飞行联队管理系统
+Documentation=file:///srv/gfvfw/deploy/DEPLOY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=gfvfw
+Group=gfvfw
+WorkingDirectory=/srv/gfvfw
+EnvironmentFile=/etc/gfvfw/env
+
+; ⚠️ 只监听回环，外部一律经 Caddy。--proxy-headers 让审计拿到真实客户端 IP。
+; ⚠️ 不要加 --workers：SQLite 是单写者，多进程会写冲突（见 DEPLOY.md）。
+ExecStart=/srv/gfvfw/.venv/bin/python -m gfvfw \
+    --host 127.0.0.1 --port 8000 \
+    --proxy-headers --log-level warning
+
+Restart=always
+RestartSec=3
+
+; 解析大 ACMI 时可能正在写文件/提交事务，给足优雅停机时间
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+; ---- 加固 ----
+; 目标是：即使应用被攻破，也改不了自己的代码、碰不了系统目录。
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+; ProtectSystem=strict 会把整个文件系统挂成只读，只放开数据目录。
+; ⚠️ 必须与 config.py 里的 storage_dir / database_url / backup_dir 一致，
+;    否则应用启动时建目录就会失败。
+ReadWritePaths=/srv/gfvfw/var
+
+; 代码目录只读 → Python 无法写 __pycache__，显式关掉字节码缓存以免告警
+Environment=PYTHONDONTWRITEBYTECODE=1
+; 服务器时间应为 UTC（展示层统一转 UTC+8，见 requirements §7.3）
+Environment=TZ=UTC
+
+[Install]
+WantedBy=multi-user.target

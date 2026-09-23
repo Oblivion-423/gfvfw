@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} 地面与海军 · 战役管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ campaign.name }} · 地面与海军</h1>
+  <div class="sub">{{ save.campaign_time_label }} ·
+    地面 {{ ground|length }} · 海军 {{ naval|length }}</div>
+</div>
+
+{% include "theater/_nav.html" %}
+
+<h2>地面单位</h2>
+<div class="row" style="margin-bottom:10px">
+  {% for k, n in ground_by_kind %}
+    <span class="badge">{{ unit_kind_cn.get(k, k) }} {{ n }}</span>
+  {% endfor %}
+</div>
+{% if not ground %}
+  <div class="empty">这份存档里没有地面单位。</div>
+{% else %}
+  <table>
+    <tr>
+      <th>编号</th><th>类型</th><th>归属</th>
+      <th>位置（东, 北）</th><th>目标位置</th>
+      <th class="num">补给</th><th class="num">士气</th><th class="num">疲劳</th>
+      <th class="num">航向</th><th class="num">损失</th>
+      <th class="num">移动</th><th class="num">建制</th>
+    </tr>
+    {% for u in ground %}
+      <tr>
+        <td class="mono">#{{ u.unit_id }}</td>
+        <td>{{ unit_kind_cn.get(u.unit_kind, u.unit_kind) }}</td>
+        <td class="nowrap">{{ team_names.get(u.team_id, '#' ~ u.team_id) }}</td>
+        <td class="mono">{{ u.grid_x|round(0)|int }}, {{ u.grid_y|round(0)|int }}</td>
+        <td class="mono">
+          {% if u.dest_x is not none %}{{ u.dest_x }}, {{ u.dest_y }}{% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ u.supply if u.supply is not none else '—' }}</td>
+        <td class="num">{{ u.morale if u.morale is not none else '—' }}</td>
+        <td class="num">{{ u.fatigue if u.fatigue is not none else '—' }}</td>
+        <td class="num">{{ u.heading if u.heading is not none else '—' }}</td>
+        <td class="num">{{ u.losses }}</td>
+        <td class="num">{{ u.moved }}</td>
+        <td class="num">{{ u.division if u.division is not none else '—' }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+
+<h2>海军单位（特混舰队）</h2>
+{% if not naval %}
+  <div class="empty">这份存档里没有海军单位。</div>
+{% else %}
+  <table>
+    <tr>
+      <th>编号</th><th>归属</th><th>位置（东, 北）</th><th>目标位置</th>
+      <th class="num">补给</th><th class="num">命令</th><th class="num">损失</th>
+      <th>被谁发现</th>
+    </tr>
+    {% for u in naval %}
+      <tr>
+        <td class="mono">#{{ u.unit_id }}</td>
+        <td class="nowrap">{{ team_names.get(u.team_id, '#' ~ u.team_id) }}</td>
+        <td class="mono">{{ u.grid_x|round(0)|int }}, {{ u.grid_y|round(0)|int }}</td>
+        <td class="mono">
+          {% if u.dest_x is not none %}{{ u.dest_x }}, {{ u.dest_y }}{% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ u.supply if u.supply is not none else '—' }}</td>
+        <td class="num">{{ u.orders if u.orders is not none else '—' }}</td>
+        <td class="num">{{ u.losses }}</td>
+        <td class="small">{% if u.spotted_by_json and u.spotted_by_json != '[]' %}{{ u.spotted_by_json }}{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+  </table>
+  <div class="small muted" style="margin-top:8px">
+    「被谁发现」是存档里 <code>spotted</code> 位掩码解出的队伍号（只取低 8 位）。
+  </div>
+{% endif %}
+{% endblock %}

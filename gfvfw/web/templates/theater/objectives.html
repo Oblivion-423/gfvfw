@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} 目标点 · 战役管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ campaign.name }} · 目标点</h1>
+  <div class="sub">
+    {{ save.campaign_time_label }} · 共 {{ save.objective_count }} 个目标点，
+    当前筛选出 {{ objs|length }} 个
+  </div>
+</div>
+
+{% include "theater/_nav.html" %}
+
+<div class="panel tight">
+  <form method="get" class="row">
+    <label class="small muted" for="type">类型</label>
+    <select id="type" name="type">
+      <option value="">全部类型</option>
+      {% for t, n in type_counts %}
+        <option value="{{ t }}" {{ 'selected' if sel_type == t else '' }}>{{ t }} ({{ n }})</option>
+      {% endfor %}
+    </select>
+
+    <label class="small muted" for="owner">归属</label>
+    <select id="owner" name="owner">
+      <option value="">全部</option>
+      <option value="-1" {{ 'selected' if sel_owner == '-1' else '' }}>中立 / 无主</option>
+      {% for tid, n in owned_counts %}
+        {% if tid >= 0 %}
+          <option value="{{ tid }}" {{ 'selected' if sel_owner == tid|string else '' }}>
+            {{ team_names.get(tid, '#' ~ tid) }} ({{ n }})
+          </option>
+        {% endif %}
+      {% endfor %}
+    </select>
+
+    <button class="btn" type="submit">筛选</button>
+    <a class="btn ghost" href="/theater/{{ campaign.id }}/objectives">清空</a>
+    <a class="btn ghost" href="/theater/{{ campaign.id }}/map?layer=all">在态势图上看</a>
+  </form>
+</div>
+
+<h2>类型分布</h2>
+<div class="row">
+  {% for t, n in type_counts %}
+    <a class="badge {{ 'accent' if sel_type == t else '' }}"
+       href="/theater/{{ campaign.id }}/objectives?type={{ t|urlencode }}{% if sel_owner %}&owner={{ sel_owner }}{% endif %}">
+      {{ t }} {{ n }}
+    </a>
+  {% endfor %}
+</div>
+
+{% if not objs %}
+  <div class="empty">没有符合条件的目标点。</div>
+{% else %}
+  <h2>目标点列表</h2>
+  <table>
+    <tr>
+      <th class="num">编号</th><th>名称</th><th>类型</th><th>归属</th>
+      <th>位置（东, 北）</th>
+      <th class="num">补给</th><th class="num">燃油</th>
+      <th class="num">损失</th><th class="num">优先级</th>
+      <th>状态来源</th>
+    </tr>
+    {% for o in objs[:600] %}
+      <tr>
+        <td class="num mono">{{ o.camp_id }}</td>
+        <td>{{ o.name|or_dash }}</td>
+        <td>{{ o.type_name|or_dash }}</td>
+        <td>
+          {% if o.team_id is not none and o.team_id >= 0 %}
+            <b>{{ team_names.get(o.team_id, '#' ~ o.team_id) }}</b>
+          {% else %}
+            <span class="muted">中立</span>
+          {% endif %}
+        </td>
+        <td class="mono">
+          {% if o.grid_x is not none %}{{ o.grid_x|round(1) }}, {{ o.grid_y|round(1) }}{% else %}—{% endif %}
+        </td>
+        <td class="num">{{ o.supply if o.supply >= 0 else '—' }}</td>
+        <td class="num">{{ o.fuel if o.fuel >= 0 else '—' }}</td>
+        <td class="num">{{ o.losses }}</td>
+        <td class="num">{{ o.priority or '—' }}</td>
+        <td class="small muted">{{ o.source }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+  {% if objs|length > 600 %}
+    <div class="small muted" style="margin-top:8px">
+      仅显示前 600 条（共 {{ objs|length }} 条）。请用上面的筛选缩小范围，
+      或到态势图上看全量分布。
+    </div>
+  {% endif %}
+  <div class="small muted" style="margin-top:10px">
+    <b>状态来源</b>：<code>obd</code> = 来自存档的 .obd 增量（最高优先）、
+    <code>obj</code> = .obj 记录、<code>uni</code> = .uni 里的目标点记录、
+    <code>none</code> = 该目标点没有任何拥有方状态（BMS 里的中立设施，占多数）。
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}{{ member.callsign }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ member.callsign }}</h1>
+    <div class="sub">
+      {% if member.service_number %}<span class="mono">{{ member.service_number }}</span> · {% endif %}
+      <span class="badge {{ status_badge.get(member.status, '') }}">
+        {{ status_labels.get(member.status, member.status) }}</span>
+      {% if member.rank %} · {{ member.rank.name }}{% endif %}
+    </div>
+  </div>
+  <div class="row">
+    {% if can_manage %}
+      <a class="btn" href="/members/{{ member.id }}/edit">编辑</a>
+    {% endif %}
+    <a class="btn ghost" href="/members">返回名册</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">飞行统计</h2>
+  {% if stats.sortie_count %}
+    <div class="stat-row">
+      <div class="stat"><span class="v">{{ stats.sortie_count }}</span><span class="k">架次</span></div>
+      <div class="stat"><span class="v">{{ stats.flight_seconds|dur }}</span><span class="k">总时长</span></div>
+      <div class="stat"><span class="v">{{ stats.distance_meters|distance }}</span><span class="k">总航程</span></div>
+      <div class="stat"><span class="v">{{ stats.takeoffs }}</span><span class="k">起飞</span></div>
+      <div class="stat"><span class="v">{{ stats.landings }}</span><span class="k">降落</span></div>
+      <div class="stat"><span class="v">{{ stats.weapons_fired }}</span><span class="k">武器投放</span></div>
+    </div>
+    {% if stats.missions %}
+      <h3>参与任务</h3>
+      <table>
+        <thead>
+          <tr><th>时间</th><th>任务</th><th>机型</th>
+              <th class="num">时长</th><th class="num">航程</th><th>可信度</th></tr>
+        </thead>
+        <tbody>
+          {% for s in stats.missions %}
+          <tr>
+            <td class="muted small nowrap">{{ s.takeoff_at|datetime }}</td>
+            <td>{{ s.mission_name }}</td>
+            <td>{{ s.aircraft or s.aircraft_raw_name or '—' }}</td>
+            <td class="num">{{ s.flight_seconds|dur }}</td>
+            <td class="num">{{ s.distance_meters|distance }}</td>
+            <td><span class="badge {{ confidence_badge.get(s.data_confidence, '') }}">
+              {{ confidence_labels.get(s.data_confidence, s.data_confidence) }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+  {% else %}
+    <p class="muted" style="margin:0">
+      暂无架次记录。上传 ACMI 并完成认领后，这里的统计会自动出现。
+    </p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">档案</h2>
+  <dl class="meta">
+    <dt>呼号</dt><dd>{{ member.callsign }}</dd>
+    <dt>队号</dt><dd class="mono">{{ member.service_number or '—' }}</dd>
+    <dt>军衔</dt><dd>{{ member.rank.name ~ ' / ' ~ member.rank.name_en if member.rank else '—' }}</dd>
+    <dt>状态</dt><dd>{{ status_labels.get(member.status, member.status) }}</dd>
+    <dt>入队日期</dt><dd>{{ member.joined_at|date }}</dd>
+    {% if member.left_at %}<dt>离队日期</dt><dd>{{ member.left_at|date }}</dd>{% endif %}
+    <dt>档案可见性</dt><dd>{{ visibility_labels.get(member.visibility, member.visibility) }}</dd>
+    <dt>角色</dt><dd>
+      {% if roles %}
+        {% for r in roles %}<span class="badge accent">{{ r|role_name }}</span> {% endfor %}
+      {% else %}—{% endif %}
+    </dd>
+  </dl>
+
+  {% if member.bio %}
+    <h3>简介</h3>
+    <p style="white-space:pre-wrap;margin:0">{{ member.bio }}</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">资质</h2>
+  {% if qualifications %}
+    <table>
+      <thead><tr><th>资质</th><th>类别</th><th>授予日期</th><th>来源</th></tr></thead>
+      <tbody>
+        {% for q in qualifications %}
+        <tr>
+          <td>{{ q.name }}</td>
+          <td class="muted small">{{ q.category }}</td>
+          <td class="muted small">{{ q.granted_at|date }}</td>
+          <td><span class="badge">{{ source_labels.get(q.source, q.source) }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted small" style="margin:0">
+      暂无资质记录。<span class="hint">资质目前由管理员手工录入，与军衔相互独立。</span>
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

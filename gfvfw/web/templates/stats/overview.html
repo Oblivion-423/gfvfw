@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}统计 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>统计总览</h1>
+    <div class="sub">
+      时长单位：小时/分　·　航程单位：海里（NM）
+      {% if ov.latest_sortie_at %} · 最近架次 {{ ov.latest_sortie_at|datetime }}{% endif %}
+    </div>
+  </div>
+  <a class="btn ghost" href="/log">飞行日志查询</a>
+</div>
+
+{% if ov.sorties == 0 %}
+<div class="empty">
+  还没有任何架次数据。<br><br>
+  按联队决定<strong>不导入历史文件</strong>，统计从成员上传的第一份 ACMI 开始累积。
+  <br><br>
+  <span class="small muted">数据录入入口已临时隐藏</span>
+</div>
+{% else %}
+
+<div class="panel">
+  <h2 style="margin-top:0">总体</h2>
+  {# ⚠️ 两个时长口径含义不同，必须分别标注：
+       「任务总时长」= 每个任务只算一次（多人同飞不重复计）
+       「飞行员累计」= 各人架次之和（人次），必然 >= 前者 #}
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ ov.sorties }}</span><span class="k">总架次</span></div>
+    <div class="stat"><span class="v">{{ ov.flight_seconds|dur }}</span><span class="k">任务总时长</span></div>
+    <div class="stat"><span class="v">{{ ov.pilot_flight_seconds|dur }}</span><span class="k">飞行员累计时长</span></div>
+    <div class="stat"><span class="v">{{ ov.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
+    <div class="stat"><span class="v">{{ ov.missions }}</span><span class="k">任务数</span></div>
+    <div class="stat"><span class="v">{{ ov.members_active }}</span><span class="k">现役成员</span></div>
+    <div class="stat"><span class="v">{{ ov.recent_30d_flight|dur }}</span><span class="k">近 30 天时长</span></div>
+  </div>
+  <div class="small muted" style="margin-top:10px">
+    「任务总时长」按任务计 —— 多人飞同一任务只算一次；
+    「飞行员累计时长」按人计 —— 是各人参战时长之和，因此 ≥ 前者。
+    排行榜与个人记录用的是按人口径。
+  </div>
+</div>
+
+{% if ov.unclaimed_sorties or ov.failed_files %}
+<div class="flash warn">
+  {% if ov.unclaimed_sorties %}
+    <strong>{{ ov.unclaimed_sorties }}</strong> 条架次尚未认领到名册，
+    <b>未计入下方排行榜</b>。
+  {% endif %}
+  {% if ov.failed_files %}
+    <br>另有 <strong>{{ ov.failed_files }}</strong> 个 ACMI 解析失败。
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">飞行员排行（按总飞行时长）</h2></div>
+  {% if pilots %}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:44px" class="num">#</th>
+        <th>呼号</th><th>状态</th>
+        <th class="num">架次</th>
+        <th class="num">总时长</th>
+        <th class="num">平均时长</th>
+        <th class="num">总航程</th>
+        <th class="num">起降</th>
+        <th class="num">武器</th>
+        <th class="num">战损</th>
+        <th>最近架次</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in pilots %}
+      <tr>
+        <td class="num muted">{{ loop.index }}</td>
+        <td><a href="/members/{{ p.member_id }}"><strong>{{ p.callsign }}</strong></a></td>
+        <td><span class="badge {{ {'active':'ok','reserve':'warn','probation':'accent'}.get(p.status,'') }}">
+          {{ {'active':'现役','reserve':'休整','retired':'退役','probation':'预备'}.get(p.status, p.status) }}</span></td>
+        <td class="num">{{ p.sorties }}</td>
+        <td class="num"><strong>{{ p.flight_seconds|dur }}</strong></td>
+        <td class="num">{{ p.avg_flight_seconds|dur }}</td>
+        <td class="num">{{ p.distance_nm|round|int }} NM</td>
+        <td class="num">{{ p.landings }}/{{ p.takeoffs }}</td>
+        <td class="num">{{ p.weapons }}</td>
+        <td class="num">{{ p.deaths }}</td>
+        <td class="small muted nowrap">{{ p.last_sortie_at|date }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty" style="margin:16px">
+    还没有已认领的架次。排行榜只统计已认领到名册的飞行。
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">机型分布</h2></div>
+  <table>
+    <thead><tr><th>ACMI 机型名</th><th>标准机型</th>
+               <th class="num">架次</th><th class="num">总时长</th><th class="num">总航程</th></tr></thead>
+    <tbody>
+      {% for a in aircraft %}
+      <tr>
+        <td class="small">{{ a.raw }}</td>
+        <td class="small">
+          {% if a.known %}{{ a.standard }}
+          {% else %}<span class="badge warn">待归一化</span>{% endif %}
+        </td>
+        <td class="num">{{ a.sorties }}</td>
+        <td class="num">{{ a.flight_seconds|dur }}</td>
+        <td class="num">{{ a.distance_nm|round|int }} NM</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% if mission_types %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">任务类型</h2></div>
+  <table>
+    <thead><tr><th>类型</th><th class="num">任务数</th><th class="num">架次</th><th class="num">总时长</th></tr></thead>
+    <tbody>
+      {% for t in mission_types %}
+      <tr>
+        <td>{{ type_labels.get(t.mission_type, t.mission_type) }}</td>
+        <td class="num">{{ t.missions }}</td>
+        <td class="num">{{ t.sorties }}</td>
+        <td class="num">{{ t.flight_seconds|dur }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if months %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">月度趋势（UTC+8）</h2></div>
+  <table>
+    <thead><tr><th>月份</th><th class="num">架次</th>
+               <th class="num">飞行时长</th><th class="num">航程</th></tr></thead>
+    <tbody>
+      {% for m in months %}
+      <tr>
+        <td class="mono">{{ m.month }}</td>
+        <td class="num">{{ m.sorties }}</td>
+        <td class="num">{{ m.flight_seconds|dur }}</td>
+        <td class="num">{{ m.distance_nm|round|int }} NM</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2 style="margin-top:0">数据质量</h2>
+  <div class="stat-row">
+    <div class="stat">
+      <span class="v">{{ quality.confidence.get('exact', 0) }}</span>
+      <span class="k">完整（有 ACMI）</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ quality.confidence.get('partial', 0) }}</span>
+      <span class="k">部分</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ quality.confidence.get('estimated', 0) }}</span>
+      <span class="k">估算</span>
+    </div>
+    <div class="stat"><span class="v">{{ quality.not_landed }}</span><span class="k">未判定降落</span></div>
+    <div class="stat"><span class="v">{{ quality.crashed }}</span><span class="k">坠毁</span></div>
+    <div class="stat"><span class="v">{{ quality.exceedance }}</span><span class="k">有过载超限</span></div>
+  </div>
+  <p class="small muted" style="margin-bottom:0">
+    「未判定降落」指 ACMI 记录结束时飞机仍在空中，或最后活动距文件结束过久
+    （可能被击落或中途退出）—— 按联队判据此时不计降落。
+  </p>
+
+  {% if quality.unclaimed %}
+  <h3>未认领的架次</h3>
+  <table>
+    <thead><tr><th>ACMI 中的名字</th><th class="num">架次</th><th class="num">飞行时长</th></tr></thead>
+    <tbody>
+      {% for u in quality.unclaimed %}
+      <tr>
+        <td>{{ u.raw_name }}</td>
+        <td class="num">{{ u.sorties }}</td>
+        <td class="num">{{ u.flight_seconds|dur }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-bottom:0">
+    这些数据已入库但未归属到人，因此不进排行榜。
+    <span class="small muted">（认领入口已临时隐藏）</span>
+  </p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

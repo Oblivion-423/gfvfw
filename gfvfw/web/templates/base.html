@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ SITE_NAME }}{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <span class="abbr">{{ SITE_ABBR }}</span>
+        <span class="cn">{{ SITE_NAME }}</span>
+      </div>
+
+      <nav class="nav">
+        <a href="/" class="{{ 'active' if current_path == '/' else '' }}">概览</a>
+
+        <a href="/members" class="{{ 'active' if current_path.startswith('/members') else '' }}">成员</a>
+
+        <a href="/theater" class="{{ 'active' if current_path.startswith('/theater') else '' }}">战役管理</a>
+
+        <div class="nav-group">
+          {% set fr_active = current_path.startswith('/log') %}
+          <a href="/log/campaign" class="{{ 'active' if fr_active else '' }}">
+            飞行记录 <span class="caret">▼</span>
+          </a>
+          <div class="nav-sub">
+            <a href="/log/campaign" class="{{ 'active' if current_path == '/log/campaign' else '' }}">战役记录</a>
+            <a href="/log/training" class="{{ 'active' if current_path == '/log/training' else '' }}">训练记录</a>
+            <a href="/log/pilots" class="{{ 'active' if current_path == '/log/pilots' else '' }}">飞行员个人记录</a>
+            <div class="sep"></div>
+            <a href="/log" class="{{ 'active' if current_path == '/log' else '' }}">高级查询</a>
+          </div>
+        </div>
+
+        <a href="/library" class="{{ 'active' if current_path.startswith('/library') else '' }}">资料查询</a>
+
+        {% if principal.can('log.view') %}
+          <a href="/stats" class="{{ 'active' if current_path.startswith('/stats') else '' }}">统计</a>
+        {% endif %}
+      </nav>
+
+      <div class="userbox">
+        {% if principal.is_authenticated %}
+          <span class="who">{{ principal.display_name }}</span>
+          <span class="role">{{ principal.primary_role_name }}</span>
+          <form method="post" action="/logout" style="display:inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn ghost" type="submit">退出</button>
+          </form>
+        {% else %}
+          <a class="btn ghost" href="/login">登录</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+      {% if warning %}<div class="flash warn">{{ warning }}</div>{% endif %}
+      {% if message %}<div class="flash ok">{{ message }}</div>{% endif %}
+
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</body>
+</html>

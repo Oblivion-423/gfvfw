@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} 存档 · 战役管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ campaign.name }} · 存档</h1>
+  <div class="sub">共 {{ all_saves|length }} 份存档</div>
+</div>
+
+{% include "theater/_nav.html" %}
+
+{% if not all_saves %}
+  <div class="empty">还没有存档。</div>
+{% else %}
+  <table>
+    <tr>
+      <th>战役时刻</th><th>存档文件</th><th>剧场</th><th>剧本</th>
+      <th class="num">版本</th><th class="num">大小</th>
+      <th class="num">目标点</th><th class="num">单位</th>
+      <th>结果</th><th>入库时间</th>
+      {% if principal.can('campaign.manage') %}<th></th>{% endif %}
+    </tr>
+    {% for s in all_saves %}
+      <tr>
+        <td class="nowrap">
+          {% if s.campaign_time_label %}{{ s.campaign_time_label }}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="mono small">{{ s.original_filename }}</td>
+        <td>{{ s.theater|or_dash }}</td>
+        <td>{{ s.scenario|or_dash }}</td>
+        <td class="num">{{ s.cam_version }}</td>
+        <td class="num">{{ s.size_bytes|filesize }}</td>
+        <td class="num">{{ s.objective_count }}</td>
+        <td class="num">
+          {{ s.flight_count + s.ground_unit_count + s.naval_unit_count }}
+        </td>
+        <td>
+          {% if s.parse_status == 'parsed' %}
+            <span class="badge ok">解析成功</span>
+          {% else %}
+            <span class="badge danger">失败</span>
+          {% endif %}
+        </td>
+        <td class="small nowrap">{{ s.created_at|datetime }}</td>
+        {% if principal.can('campaign.manage') %}
+        <td>
+          <form method="post"
+                action="/theater/{{ campaign.id }}/saves/{{ s.id }}/delete"
+                onsubmit="return confirm('删除这份存档？它会连同 {{ s.objective_count }} 个目标点与全部单位明细一起删除，战局可能回退到上一份存档。原始 .cam 文件也会从服务器删除。')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn danger" type="submit">删除</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+
+<div class="panel tight" style="margin-top:20px">
+  <div class="small muted" style="line-height:1.8">
+    <b>为什么只留最新一份的明细？</b>
+    6944 个目标点 × 165 份存档 ≈ 110 万行，对小型服务器上的 SQLite 过重。
+    因此每份存档都保留元数据、队伍状态与事件（时间线的骨架），
+    但目标点/单位明细只保留最新一份；历史归属由「易手记录」重建。
+    原始 <code>.cam</code> 文件本身全部保留在服务器上，需要时可以重新解析。
+  </div>
+</div>
+{% endblock %}

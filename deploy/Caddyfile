@@ -1,0 +1,48 @@
+# ==========================================================================
+# GFVFW 反向代理配置（Caddy 2.x）
+#
+# 用法：把 gfvfw.example.com 换成你的域名，放到 /etc/caddy/Caddyfile，
+#       然后 `caddy validate --config /etc/caddy/Caddyfile` 再 `systemctl reload caddy`。
+#
+# ⚠️ 本文件刻意只使用最小的一组指令。Caddy 无法在本项目的开发机上验证，
+#    所以宁可少写：每个指令的确切拼写都以能通过 caddy validate 为准。
+# ==========================================================================
+
+gfvfw.example.com {
+	# 压缩文本响应（HTML/CSS/JSON）。对已经压过的 ACMI（zip）几乎无效果，
+	# 但也无害 —— Caddy 会跳过 image/* 等类型。
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:8000 {
+		# ⚠️⚠️ 这一行是**必须的**，不是可选优化。
+		#
+		# Caddy 默认把客户端传来的 X-Forwarded-For **追加**在后面，
+		# 而应用取的是第一段（services/audit.py::_client_ip）。
+		# 于是客户端只要自己带一个 `X-Forwarded-For: 1.2.3.4`，
+		# 它就会成为审计记录里那个"客户端 IP" —— 可伪造。
+		#
+		# 改成"覆盖"后，头的唯一取值就是真实对端地址，第一段即真实值。
+		header_up X-Forwarded-For {http.request.remote.host}
+	}
+
+	# 这个站点只给联队内部用，明确告诉搜索引擎不要收录。
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+}
+
+# --------------------------------------------------------------------------
+# 关于「上传体积」与「长超时」，这里**故意什么都不配**，原因如下：
+#
+# * 上传体积：Caddy 默认没有请求体上限，正好符合本项目
+#   （ACMI 上限 256 MB、.cam 32 MB）。
+#   ⚠️ 对比：Nginx 默认 client_max_body_size 1m，不改的话所有上传直接 413；
+#      Apache 需要单独设 LimitRequestBody。
+#
+# * 超时：Caddy 默认不设代理读写超时。真实 ACMI 解析要几秒到一分钟以上，
+#   长请求不会被掐断。⚠️ 对比：Nginx proxy_read_timeout 默认 60s，会 504。
+#
+# 日志：默认写 journald，用 `journalctl -u caddy -f` 看，因此这里不另配 log 块
+# （少一个需要预先创建 /var/log/caddy 目录的失败点）。
+# --------------------------------------------------------------------------

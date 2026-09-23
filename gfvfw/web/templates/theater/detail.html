@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} · 战役管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ campaign.name }}</h1>
+  <div class="sub">
+    {% if ov.save %}
+      剧场 <b>{{ ov.save.theater }}</b> · 剧本 <b>{{ ov.save.scenario }}</b> ·
+      存档 <code>{{ ov.save.original_filename }}</code> ·
+      .cam 版本 {{ ov.save.cam_version }}
+    {% else %}
+      还没有可用存档
+    {% endif %}
+  </div>
+</div>
+
+{% include "theater/_nav.html" %}
+
+{# ACMI 工作台：战役固定为当前战役，归并出的任务直接归入它。
+   放在存档判断之外 —— 没有 .cam 存档也能先上传 ACMI。 #}
+{% if acmi_any %}{% include "acmi/_wizard.html" %}{% endif %}
+
+{% if saved %}
+  <div class="flash ok">存档已入库。</div>
+{% endif %}
+
+{% if not ov.save %}
+  <div class="empty">
+    这个战役还没有解析成功的存档。
+    {% if can_upload %}<a href="/theater/upload">去上报一份</a>。{% endif %}
+  </div>
+{% else %}
+
+{% set s = ov.save %}
+<div class="panel tight">
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ s.campaign_time_label }}</span><span class="k">战役内时刻</span></div>
+    <div class="stat"><span class="v">{{ s.campaign_day }}</span><span class="k">第几天（currentDay）</span></div>
+    <div class="stat"><span class="v">{{ s.active_teams }}</span><span class="k">在场队伍</span></div>
+    <div class="stat"><span class="v">{{ s.situation }}</span><span class="k">态势码</span></div>
+    <div class="stat"><span class="v">{{ s.tempo if s.tempo is not none else '—' }}</span><span class="k">节奏 tempo</span></div>
+    <div class="stat"><span class="v">{{ s.objective_count }}</span><span class="k">目标点</span></div>
+    <div class="stat"><span class="v">{{ s.flight_count }}</span><span class="k">飞行</span></div>
+    <div class="stat"><span class="v">{{ s.ground_unit_count }}</span><span class="k">地面单位</span></div>
+    <div class="stat"><span class="v">{{ s.naval_unit_count }}</span><span class="k">海军单位</span></div>
+    <div class="stat"><span class="v">{{ s.squadron_count }}</span><span class="k">中队</span></div>
+    <div class="stat"><span class="v">{{ s.event_count }}</span><span class="k">情报事件</span></div>
+  </div>
+  <div class="small muted" style="margin-top:10px">
+    靶心 ({{ s.bullseye_x }}, {{ s.bullseye_y }}) ·
+    剧场尺寸 {{ s.theater_size_x }}×{{ s.theater_size_y }} ·
+    TE 时限 {{ s.te_time_limit }} ms · 胜利分 {{ s.te_victory_pts }} ·
+    存档 SHA256 <code class="mono">{{ s.sha256[:16] }}…</code>
+  </div>
+</div>
+
+{% if warnings %}
+  <div class="flash warn">
+    <b>解析告警 {{ warnings|length }} 条</b>（数据仍可用，但下列情况值得注意）：
+    <ul style="margin:6px 0 0 18px">
+      {% for w in warnings[:8] %}<li class="small">{{ w }}</li>{% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<h2>兵力对比</h2>
+{% set active = teams|selectattr('active')|list %}
+{% if not active %}
+  <div class="empty">这份存档里没有在场队伍。</div>
+{% else %}
+  <table>
+    <tr>
+      <th>队伍</th>
+      <th class="num">占有目标点</th>
+      <th class="num">飞机</th>
+      <th class="num">防空</th>
+      <th class="num">地面</th>
+      <th class="num">舰船</th>
+      <th class="num">基地</th>
+      <th class="num">补给</th>
+      <th class="num">燃油</th>
+      <th class="num">补充兵</th>
+      <th class="num">补给率</th>
+      <th class="num">空战经验</th>
+      <th class="num">地战经验</th>
+      <th>起始 → 当前（飞机 / 地面）</th>
+    </tr>
+    {% for t in active %}
+      <tr>
+        <td><b>{{ t.name }}</b> <span class="muted small">#{{ t.team_id }}</span></td>
+        <td class="num">{{ t.owned_objectives or '—' }}</td>
+        <td class="num">{{ t.st_aircraft }}</td>
+        <td class="num">{{ t.st_air_def }}</td>
+        <td class="num">{{ t.st_ground }}</td>
+        <td class="num">{{ t.st_ships }}</td>
+        <td class="num">{{ t.st_bases }}</td>
+        <td class="num">{{ t.supply }}</td>
+        <td class="num">{{ t.fuel }}</td>
+        <td class="num">{{ t.replacements }}</td>
+        <td class="num">{{ t.supply_lvl }}</td>
+        <td class="num">{{ t.exp_air }}</td>
+        <td class="num">{{ t.exp_ground }}</td>
+        <td class="small nowrap">
+          {{ t.start_aircraft }} → <b>{{ t.st_aircraft }}</b>
+          /
+          {{ t.start_ground }} → <b>{{ t.st_ground }}</b>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+
+  {# 用当前兵力画对比条：比 .cmp 里的 forceRatios 可靠 —— 那四个字段在本存档里全是 0 #}
+  <div class="panel tight" style="margin-top:14px">
+    <div class="small muted" style="margin-bottom:8px">
+      当前兵力占比（按飞机 + 地面 + 防空 + 舰船合计）
+    </div>
+    {% set totals = [] %}
+    {% for t in active %}
+      {% set v = t.st_aircraft + t.st_ground + t.st_air_def + t.st_ships %}
+      {% set _ = totals.append(v) %}
+    {% endfor %}
+    {% set grand = totals|sum %}
+    {% if grand == 0 %}
+      <div class="muted small">这份存档里各队伍兵力均为 0（战役尚未部署）。</div>
+    {% else %}
+      {% for t in active %}
+        {% set v = t.st_aircraft + t.st_ground + t.st_air_def + t.st_ships %}
+        <div class="row" style="gap:10px;margin-bottom:6px">
+          <span class="small nowrap" style="min-width:110px">{{ t.name }}</span>
+          <span style="flex:1;background:var(--bg-elevated);border-radius:4px;height:14px;display:block">
+            <span style="display:block;height:14px;border-radius:4px;
+                         width:{{ (100.0 * v / grand)|round(1) }}%;
+                         background:var(--accent)"></span>
+          </span>
+          <span class="small num nowrap" style="min-width:110px">
+            {{ v }} ({{ (100.0 * v / grand)|round(1) }}%)
+          </span>
+        </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+{% endif %}
+
+<h2>目标点归属</h2>
+<div class="row">
+  {% for tid, n in ov.objective_types %}
+    <span class="badge">{{ tid }} {{ n }}</span>
+  {% endfor %}
+</div>
+<div class="small muted" style="margin-top:8px">
+  共 {{ s.objective_count }} 个目标点。
+  <a href="/theater/{{ campaign.id }}/objectives">按类型与归属筛选 →</a>
+</div>
+
+{% if ov.last_changes %}
+  <h2>最近易手</h2>
+  <table>
+    <tr><th>时刻</th><th>目标点</th><th>类型</th><th>归属变化</th></tr>
+    {% for c in ov.last_changes %}
+      <tr>
+        <td class="nowrap">{{ c.at_campaign_time_label }}</td>
+        <td>{{ c.objective_name|or_dash }}</td>
+        <td>{{ c.type_name|or_dash }}</td>
+        <td>
+          <span class="muted">{{ '中立' if c.from_team < 0 else '#' ~ c.from_team }}</span>
+          →
+          <b>{{ '中立' if c.to_team < 0 else '#' ~ c.to_team }}</b>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  <div class="small muted" style="margin-top:8px">
+    累计 {{ ov.change_count }} 次易手。<a href="/theater/{{ campaign.id }}/timeline">看完整战役进程 →</a>
+  </div>
+{% endif %}
+
+{% if events %}
+  <h2>情报事件</h2>
+  <table>
+    <tr><th>时刻</th><th>队伍</th><th>位置（东, 北）</th><th>内容</th></tr>
+    {% for e in events %}
+      <tr>
+        <td class="nowrap">{{ e.at_campaign_time_label }}</td>
+        <td>#{{ e.team_id }}</td>
+        <td class="mono">{{ e.grid_x }}, {{ e.grid_y }}</td>
+        <td>{{ e.text }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+
+<div class="actions">
+  <a class="btn ghost" href="/theater/{{ campaign.id }}/map">战场态势图</a>
+  <a class="btn ghost" href="/theater/{{ campaign.id }}/air">空中态势</a>
+  <a class="btn ghost" href="/theater/{{ campaign.id }}/ground">地面 / 海军</a>
+  {% if can_upload %}<a class="btn ghost" href="/theater/upload">再上报一份存档</a>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}删除任务 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>删除任务</h1>
+    <div class="sub">{{ mission.name }}</div>
+  </div>
+  <a class="btn ghost" href="/missions/{{ mission.id }}">返回任务</a>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">这一步会连带做什么</h2>
+  <table>
+    <thead><tr><th>对象</th><th>处理</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>任务本身</td>
+        <td><span class="badge warn">软删除</span></td>
+        <td>记录保留在库里（不物理删除），只是不再出现在列表中</td>
+      </tr>
+      <tr>
+        <td>参战架次 <strong>{{ sortie_count }}</strong> 个</td>
+        <td><span class="badge warn">一并软删除</span></td>
+        <td>否则它们会继续出现在查询与排行榜里</td>
+      </tr>
+      <tr>
+        <td>ACMI 文件 <strong>{{ files|length }}</strong> 份</td>
+        <td><span class="badge ok">拆回待归并</span></td>
+        <td>删任务多半是因为归并归错了；拆回去才能重新归并</td>
+      </tr>
+    </tbody>
+  </table>
+
+  {% if files %}
+  <div class="small muted" style="margin-top:12px">将被拆回待归并的文件：</div>
+  <ul class="small">
+    {% for f in files %}<li>{{ f.original_filename }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</div>
+
+<div class="flash warn">
+  <strong>这是"撤销这次归并"的操作。</strong>
+  删除后该任务的架次不再计入统计；ACMI 文件会回到「归并确认」里等你重新归并。
+  审计日志会记下谁在什么时候删的。
+</div>
+
+<form method="post" action="/missions/{{ mission.id }}/delete" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="field full">
+    <label for="reason">删除原因（建议填写，会进审计日志）</label>
+    <input type="text" id="reason" name="reason" maxlength="200">
+  </div>
+  <div class="actions">
+    <button class="btn danger" type="submit">确认删除任务</button>
+    <a class="btn ghost" href="/missions/{{ mission.id }}">取消</a>
+  </div>
+</form>
+{% endblock %}

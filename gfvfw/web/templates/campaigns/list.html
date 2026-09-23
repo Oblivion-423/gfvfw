@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}战役 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>战役</h1>
+    <div class="sub">
+      共 {{ campaigns|length }} 个
+      {% if unassigned %} · <span class="badge warn">{{ unassigned }} 个任务尚未归入战役</span>{% endif %}
+    </div>
+  </div>
+  {% if can_manage %}
+    <a class="btn" href="/campaigns/new">新建战役</a>
+  {% endif %}
+</div>
+
+{% if campaigns %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <table>
+    <thead>
+      <tr>
+        <th>战役</th><th>战区</th><th>状态</th><th>时间范围</th>
+        <th class="num">任务</th><th class="num">架次</th>
+        <th class="num">总时长</th><th class="num">总航程</th>
+        <th class="num">参战</th><th class="num">战损</th><th>可见性</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in campaigns %}
+      {% set c = row.campaign %}
+      <tr>
+        <td><a href="/campaigns/{{ c.id }}"><strong>{{ c.name }}</strong></a></td>
+        <td class="small muted">{{ c.theater or '—' }}</td>
+        <td><span class="badge {{ status_badge.get(c.status,'') }}">
+          {{ status_labels.get(c.status, c.status) }}</span></td>
+        <td class="small muted nowrap">
+          {% if c.started_at %}{{ c.started_at|date }}{% else %}—{% endif %}
+          {% if c.ended_at %} ~ {{ c.ended_at|date }}{% endif %}
+        </td>
+        <td class="num">{{ row.missions }}</td>
+        <td class="num">{{ row.sorties }}</td>
+        <td class="num">{{ row.flight_seconds|dur }}</td>
+        <td class="num">{{ row.distance_nm|round|int }} NM</td>
+        <td class="num">{{ row.pilots }}</td>
+        <td class="num">{{ row.deaths }}</td>
+        <td class="small muted">{{ visibility_labels.get(c.visibility, c.visibility) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">
+  还没有战役。
+  {% if can_manage %}
+    <br><br><a class="btn" href="/campaigns/new">新建第一个战役</a>
+    <br><span class="small">战役是可选的 —— 日常训练不归入战役也能正常记录。</span>
+  {% else %}
+    <br><span class="small">战役用于把多次任务组织成一个阶段性的作战行动。</span>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}任务 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>任务记录</h1>
+    <div class="sub">共 {{ missions|length }} 条</div>
+  </div>
+  <a class="btn ghost" href="/log">高级查询</a>
+</div>
+
+{% if missions %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <table>
+    <thead>
+      <tr>
+        <th>任务时间（UTC+8）</th>
+        <th>名称</th>
+        <th>类型</th>
+        <th>战役</th>
+        <th class="num">参战</th>
+        <th class="num">总时长</th>
+        <th>ACMI</th>
+        <th>可见性</th>
+        {% if can_edit %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in missions %}
+      {% set m = row.mission %}
+      <tr>
+        <td class="small nowrap">{{ m.started_at|datetime }}</td>
+        <td><a href="/missions/{{ m.id }}">{{ m.name }}</a></td>
+        <td class="small">{{ type_labels.get(m.mission_type, m.mission_type) }}</td>
+        <td class="small muted">
+          {% if m.campaign_id and campaign_names.get(m.campaign_id) %}
+            <a href="/campaigns/{{ m.campaign_id }}">{{ campaign_names[m.campaign_id] }}</a>
+          {% else %}—{% endif %}
+        </td>
+        <td class="num">{{ row.sortie_count }}</td>
+        <td class="num">{{ m.duration_seconds|dur }}</td>
+        <td>
+          <span class="badge {{ 'ok' if m.acmi_completeness == 'complete' else ('warn' if m.acmi_completeness == 'partial' else 'danger') }}">
+            {{ {'complete':'完整','partial':'部分','missing':'缺失','unknown':'未知'}.get(m.acmi_completeness, m.acmi_completeness) }}
+          </span>
+        </td>
+        <td class="small muted">
+          {{ {'public':'公开','members':'内部','command':'指挥层'}.get(m.visibility, m.visibility) }}
+        </td>
+        {% if can_edit %}
+        <td class="nowrap">
+          <a class="small" href="/missions/{{ m.id }}/edit">编辑</a>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">
+  还没有任务记录。<br><br>
+  <span class="small muted">
+    上传 ACMI 并归并确认后会生成任务 —— 入口在「飞行记录 · 战役记录 / 训练记录」
+    页面内的「ACMI 工作台」。
+  </span>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,21 @@
+{# 战役管理子导航 —— 所有战役页面共用。
+
+   放在各页面顶部，标题下方。没有最新存档时只显示"总览/上报/存档"三项，
+   避免点进去都是空页。 #}
+<div class="steps" style="margin-bottom:16px">
+  <a class="step {{ 'current' if sub == 'detail' else '' }}" href="/theater/{{ campaign.id }}">总览</a>
+  <span class="step-sep">›</span>
+  {% if latest %}
+    <a class="step {{ 'current' if sub == 'map' else '' }}" href="/theater/{{ campaign.id }}/map">态势图</a>
+    <span class="step-sep">›</span>
+    <a class="step {{ 'current' if sub == 'air' else '' }}" href="/theater/{{ campaign.id }}/air">空中</a>
+    <span class="step-sep">›</span>
+    <a class="step {{ 'current' if sub == 'ground' else '' }}" href="/theater/{{ campaign.id }}/ground">地面 / 海军</a>
+    <span class="step-sep">›</span>
+    <a class="step {{ 'current' if sub == 'objectives' else '' }}" href="/theater/{{ campaign.id }}/objectives">目标点</a>
+    <span class="step-sep">›</span>
+    <a class="step {{ 'current' if sub == 'timeline' else '' }}" href="/theater/{{ campaign.id }}/timeline">战役进程</a>
+    <span class="step-sep">›</span>
+  {% endif %}
+  <a class="step {{ 'current' if sub == 'saves' else '' }}" href="/theater/{{ campaign.id }}/saves">存档</a>
+</div>

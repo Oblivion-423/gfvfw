@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}飞行员个人记录 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>飞行员个人记录</h1>
+    <div class="sub">时长：小时/分　·　航程：海里（NM）</div>
+  </div>
+  <div class="row">
+    <a class="btn ghost" href="/log/campaign">战役记录</a>
+    <a class="btn ghost" href="/log/training">训练记录</a>
+  </div>
+</div>
+
+<form method="get" action="/log/pilots" class="panel tight">
+  <div class="row">
+    <div class="field" style="min-width:240px">
+      <label for="member_id">选择成员</label>
+      <select id="member_id" name="member_id" onchange="this.form.submit()">
+        <option value="">— 请选择 —</option>
+        {% for m in members %}
+          <option value="{{ m.id }}" {{ 'selected' if q.member_id == m.id else '' }}>
+            {{ m.callsign }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="spacer"></div>
+    <div class="row" style="align-self:flex-end">
+      <button class="btn" type="submit">查看</button>
+      {% if q.member_id %}<a class="btn ghost" href="/log/pilots">清除</a>{% endif %}
+    </div>
+  </div>
+</form>
+
+{% if selected %}
+<div class="panel">
+  <h2 style="margin-top:0">
+    {{ selected.callsign }} 的记录
+    <a class="btn ghost" style="margin-left:8px" href="/members/{{ selected.id }}">档案页</a>
+  </h2>
+  {% if totals and totals.sorties %}
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ totals.sorties }}</span><span class="k">架次</span></div>
+    <div class="stat"><span class="v">{{ totals.flight_seconds|dur }}</span><span class="k">总飞行时长</span></div>
+    <div class="stat"><span class="v">{{ totals.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
+    <div class="stat"><span class="v">{{ totals.landings }}/{{ totals.takeoffs }}</span><span class="k">降落/起飞</span></div>
+    <div class="stat"><span class="v">{{ totals.weapons }}</span><span class="k">武器投放</span></div>
+    <div class="stat"><span class="v">{{ totals.deaths }}</span><span class="k">战损</span></div>
+  </div>
+  {% else %}
+  <p class="muted" style="margin:0">该成员暂无架次记录。</p>
+  {% endif %}
+</div>
+
+{% if detail %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <table>
+    <thead>
+      <tr><th>起飞时间（UTC+8）</th><th>任务</th><th>类型</th><th>机型</th>
+          <th class="num">时长</th><th class="num">航程</th>
+          <th>状态</th><th>数据</th></tr>
+    </thead>
+    <tbody>
+      {% for r in detail %}
+      <tr>
+        <td class="small nowrap">{{ r.takeoff_at|datetime }}</td>
+        <td class="small"><a href="/missions/{{ r.mission_id }}">{{ r.mission_name }}</a></td>
+        <td class="small">{{ type_labels.get(r.mission_type, r.mission_type) }}</td>
+        <td class="small">{{ r.aircraft_raw or '—' }}</td>
+        <td class="num">{{ r.flight_seconds|dur }}</td>
+        <td class="num">{{ r.distance_meters|nm }} NM</td>
+        <td>
+          {% if r.crashed %}<span class="badge danger">坠毁</span>
+          {% elif r.deaths %}<span class="badge danger">被击落</span>
+          {% elif r.landing_count %}<span class="badge ok">已降落</span>
+          {% else %}<span class="badge warn">未判定降落</span>{% endif %}
+        </td>
+        <td><span class="badge {{ confidence_badge.get(r.data_confidence,'') }}">
+          {{ confidence_labels.get(r.data_confidence, r.data_confidence) }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% else %}
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">个人成绩总表</h2></div>
+  {% if leaderboard %}
+  <table>
+    <thead>
+      <tr><th style="width:44px" class="num">#</th><th>呼号</th><th>状态</th>
+          <th class="num">架次</th><th class="num">总时长</th>
+          <th class="num">总航程</th><th>最近架次</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in leaderboard %}
+      <tr>
+        <td class="num muted">{{ loop.index }}</td>
+        <td><strong>{{ p.callsign }}</strong></td>
+        <td><span class="badge {{ {'active':'ok','reserve':'warn','probation':'accent'}.get(p.status,'') }}">
+          {{ {'active':'现役','reserve':'休整','retired':'退役','probation':'预备'}.get(p.status, p.status) }}</span></td>
+        <td class="num">{{ p.sorties }}</td>
+        <td class="num">{{ p.flight_seconds|dur }}</td>
+        <td class="num">{{ p.distance_nm|round|int }} NM</td>
+        <td class="small muted nowrap">{{ p.last_sortie_at|date }}</td>
+        <td><a class="btn ghost" href="/log/pilots?member_id={{ p.member_id }}">明细</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty" style="margin:16px">
+    还没有已认领的飞行记录。<br>
+    <span class="small">只有认领到名册的架次才计入个人成绩。</span>
+  </div>
+  {% endif %}
+</div>
+
+{% if unclaimed %}
+<div class="panel">
+  <h2 style="margin-top:0">未认领的记录</h2>
+  <p class="small muted" style="margin-top:-6px">
+    这些名字出现在 ACMI 中但未绑定名册成员。<strong>不计入个人成绩</strong>，
+    认领后会自动归入对应成员。
+  </p>
+  <table>
+    <thead><tr><th>ACMI 中的名字</th><th class="num">架次</th><th class="num">飞行时长</th></tr></thead>
+    <tbody>
+      {% for u in unclaimed %}
+      <tr>
+        <td>{{ u.raw_name }}</td>
+        <td class="num">{{ u.sorties }}</td>
+        <td class="num">{{ u.flight_seconds|dur }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="actions">
+    <span class="small muted">（认领入口已临时隐藏）</span>
+  </div>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

@@ -1,0 +1,38 @@
+# GFVFW 联队管理系统 —— Python 依赖
+#
+# 目标：Python 3.10+ / SQLite(WAL) / 可平滑迁移 PostgreSQL
+#
+# ⚠️ 关键决策：SQLAlchemy 安装时必须带 `postgresql` extra。
+#    原因：这会启用 SQLAlchemy 的跨方言类型校验，使**在 SQLite 上使用
+#    SQLite 专有语法会被直接拒绝**，把设计文档里"禁用 SQLite 专有特性"
+#    从口头约定变成强制机制（见 docs/database-design.md §0）。
+#    同时 postgresql 方言需要 psycopg 驱动，一并安装。
+
+# --- Web 框架 ---
+fastapi>=0.111
+# ⚠️ 使用裸 uvicorn，**不要**用 uvicorn[standard]：
+#    后者会拉入需源码编译的依赖（httptools 等），在 Windows 上会卡死
+#    （实测 CPU 累计 780 秒仍无进展）。生产环境如需高性能可改用 gunicorn( Linux )
+#    或后续单独评估 uvloop/httptools。
+uvicorn>=0.30
+jinja2>=3.1                 # 服务端渲染模板（一期不做前后端分离）
+python-multipart>=0.0.9     # 文件上传
+itsdangerous>=2.2           # SessionMiddleware 依赖（签名会话 Cookie）
+
+# --- 数据层 ---
+# ⚠️ 注意：SQLAlchemy[postgresql] 实际拉入的是 psycopg2（非 psycopg3）。
+#    两者都由 SQLAlchemy 的 postgresql 方言支持，此处不重复指定驱动名，
+#    避免解析出两个并存的 PG 驱动。
+SQLAlchemy[postgresql]>=2.0
+alembic>=1.13               # 迁移（即使一期用 SQLite 也要，便于将来迁 PG）
+
+# --- 校验与配置 ---
+pydantic>=2.7
+pydantic-settings>=2.3
+
+# --- 认证 ---
+argon2-cffi>=23.1           # 密码哈希（argon2id）
+
+# --- 开发与测试 ---
+pytest>=8.0
+pytest-cov>=5.0

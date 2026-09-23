@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}上报战役存档 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>上报战役存档</h1>
+  <div class="sub">
+    上传一个 Falcon BMS 战役存档（<code>.cam</code>），系统会解析出当时的战场态势。
+    同一文件重复上传会被 SHA256 识别，不会重复入库。
+  </div>
+</div>
+
+<form method="post" action="/theater/upload" enctype="multipart/form-data" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <div class="form-grid">
+    <div class="field full">
+      <label for="file">存档文件（.cam）</label>
+      <input type="file" id="file" name="file" accept=".cam" required>
+      <span class="hint">
+        在 BMS 安装目录的 <code>Data\Campaign\</code> 或
+        <code>Data\Add-On &lt;剧场&gt;\Campaign\</code> 下，形如
+        <code>Save-Day  3 02 00 46.cam</code>。上限 {{ max_mb }} MB。
+      </span>
+    </div>
+
+    <div class="field full">
+      <label for="campaign_id">归入战役</label>
+      <select id="campaign_id" name="campaign_id">
+        <option value="">（自动：按剧场与剧本匹配，找不到就新建）</option>
+        {% for c in campaigns %}
+          <option value="{{ c.id }}">{{ c.name }}{% if c.theater %} · {{ c.theater }}{% endif %}</option>
+        {% endfor %}
+      </select>
+      <span class="hint">
+        连续上传同一战役的多份存档时，请选同一个战役——「战役进程」页面靠这个把
+        各存档串成时间线，并算出期间目标点的易手情况。
+      </span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">解析并入库</button>
+    <a class="btn ghost" href="/theater">返回战役列表</a>
+  </div>
+</form>
+
+<div class="panel">
+  <h2 style="margin-top:0">解析需要什么</h2>
+  <div class="small muted" style="line-height:1.8">
+    <b>需要服务器上有 BMS 安装目录。</b> <code>.cam</code> 里的单位是一条自描述的字节流，
+    必须用安装目录下的<b>类表</b>（<code>Falcon4_CT.xml</code>）才能判断每条记录是
+    飞行、编队、中队还是营连；目标点的名称与类型则来自
+    <code>CampObjData.xml</code> 与 <code>OCD_*.XML</code>。<br>
+    当前配置：<code>{{ bms_path or '（未配置）' }}</code>
+    {% if not bms_path %}
+      <br><span class="badge danger">未配置</span>
+      请设置环境变量 <code>GFVFW_BMS_INSTALL_PATH</code> 后重启服务。
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% set is_new = (sortie is none) %}
+{% block title %}{{ '补录架次' if is_new else '编辑架次' }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ '补录架次' if is_new else '编辑架次' }}</h1>
+    <div class="sub">
+      任务 {{ mission.name if mission else '—' }}
+      {% if not is_new %}· 原始名 {{ sortie.raw_pilot_name }}
+        {% if sortie.data_source == 'manual' %}<span class="badge warn">手动录入</span>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+  <a class="btn ghost" href="/missions/{{ mission.id if mission else '' }}">返回任务</a>
+</div>
+
+{% if is_new %}
+<div class="flash warn">
+  <strong>补录的架次会被标记为「手动」与「估算」。</strong>
+  这用于"忘记录制/文件丢失"的兜底（需求 R10），不会与 ACMI 解析出的架次混淆。
+  如果你有原始 ACMI，请优先走上传流程 —— 那才是可信数据。
+</div>
+{% else %}
+<div class="flash info">
+  人工修正会<strong>记录修正人与修改前后</strong>（审计日志）。
+  修改后该架次的<strong>可信度会降为「估算」</strong> —— 它不再是 ACMI 的原始解析结果。
+  时间按 <strong>{{ DISPLAY_TZ_LABEL }}</strong> 填写，时长/航程按联队口径（小时分 / 海里）。
+</div>
+{% endif %}
+
+<form method="post"
+      action="{{ '/missions/' ~ mission.id ~ '/sorties/new' if is_new else '/sorties/' ~ sortie.id ~ '/edit' }}"
+      class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <h2 style="margin-top:0">归属</h2>
+  <div class="form-grid">
+    {% if can_reassign %}
+    <div class="field">
+      <label for="member_id">名册成员</label>
+      <select id="member_id" name="member_id">
+        <option value="">（未认领 —— 只保留 ACMI 里的名字）</option>
+        {% for m in members %}
+          <option value="{{ m.id }}" {{ 'selected' if form.member_id == m.id else '' }}>{{ m.callsign }}</option>
+        {% endfor %}
+      </select>
+      <span class="hint">改这里就是"改归属"：把架次从一个人改到另一个人</span>
+    </div>
+    {% else %}
+    <div class="field">
+      <label>名册成员</label>
+      <div class="small muted">
+        只能编辑自己的架次，不能改归属。改归属需要 <code>log.edit.any</code> 权限。
+      </div>
+    </div>
+    {% endif %}
+
+    {% if is_new %}
+    <div class="field">
+      <label for="raw_pilot_name">或：ACMI 中的名字</label>
+      <input type="text" id="raw_pilot_name" name="raw_pilot_name" maxlength="64">
+      <span class="hint">没选成员时用它 —— 之后可在「飞行员认领」里绑定到名册</span>
+    </div>
+    {% endif %}
+
+    <div class="field">
+      <label for="aircraft_raw_name">机型</label>
+      <input type="text" id="aircraft_raw_name" name="aircraft_raw_name" maxlength="64"
+             value="{{ form.aircraft_raw_name }}">
+      <span class="hint">填 ACMI 里的原始机型名，系统按别名表归一化</span>
+    </div>
+  </div>
+
+  <h2>时长与航程（联队口径）</h2>
+  <div class="form-grid">
+    {% set h = (form.flight_seconds // 3600) if form.flight_seconds else 0 %}
+    {% set mnt = ((form.flight_seconds % 3600) // 60) if form.flight_seconds else 0 %}
+    {% set sec = (form.flight_seconds % 60) if form.flight_seconds else 0 %}
+    <div class="field">
+      <label>飞行时长</label>
+      <div class="row" style="gap:6px;align-items:center">
+        <input type="number" name="hours" style="width:80px" min="0" max="1000"
+               value="{{ h }}"> 时
+        <input type="number" name="minutes" style="width:70px" min="0" max="59"
+               value="{{ mnt }}"> 分
+        <input type="number" name="seconds" style="width:70px" min="0" max="59"
+               value="{{ sec }}"> 秒
+      </div>
+      <span class="hint">展示口径是"小时/分"，但秒要保留，短架次才不失真</span>
+    </div>
+    <div class="field">
+      <label for="distance_nm">航程（海里 NM）</label>
+      <input type="number" id="distance_nm" name="distance_nm" step="0.1" min="0"
+             value="{{ '%.1f' % (form.distance_meters / 1852) if form.distance_meters else '' }}">
+    </div>
+    <div class="field">
+      <label for="takeoff_at">起飞（{{ DISPLAY_TZ_LABEL }}）</label>
+      <input type="datetime-local" id="takeoff_at" name="takeoff_at"
+             value="{{ form.takeoff_at }}">
+    </div>
+    <div class="field">
+      <label for="landing_at">降落（{{ DISPLAY_TZ_LABEL }}）</label>
+      <input type="datetime-local" id="landing_at" name="landing_at"
+             value="{{ form.landing_at }}">
+    </div>
+  </div>
+
+  <h2>战斗数据</h2>
+  <div class="form-grid">
+    {% for name, label in [('takeoff_count','起飞次数'), ('landing_count','降落次数'),
+                           ('weapons_fired','武器投放'), ('kills','击落'),
+                           ('deaths','战损'), ('exceedance_count','超限次数')] %}
+    <div class="field">
+      <label for="{{ name }}">{{ label }}</label>
+      <input type="number" id="{{ name }}" name="{{ name }}" min="0"
+             value="{{ form[name] }}">
+    </div>
+    {% endfor %}
+    <div class="field full">
+      <label for="edit_note">{{ '备注' if is_new else '修正说明（会进审计日志）' }}</label>
+      <input type="text" id="edit_note" name="edit_note" maxlength="200"
+             value="{{ form.edit_note }}">
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">{{ '补录' if is_new else '保存修改' }}</button>
+    <a class="btn ghost" href="/missions/{{ mission.id if mission else '' }}">取消</a>
+  </div>
+</form>
+
+{# ⚠️ 删除表单必须放在上面那个 form **外面** —— HTML 不允许 form 嵌套，
+   嵌进去的话浏览器会忽略内层 form，删除按钮直接失效。 #}
+{% if not is_new and principal.can('log.delete') %}
+<form method="post" action="/sorties/{{ sortie.id }}/delete" class="panel"
+      onsubmit="return confirm('删除这条架次？它不再计入统计，但审计日志会留痕。')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2 style="margin-top:0">删除这条架次</h2>
+  <p class="small muted" style="margin-top:-6px">
+    软删除：记录保留在库里，只是不再计入统计与查询。
+  </p>
+  <div class="field full">
+    <label for="reason">删除原因（会进审计日志）</label>
+    <input type="text" id="reason" name="reason" maxlength="200">
+  </div>
+  <div class="actions">
+    <button class="btn danger" type="submit">确认删除</button>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

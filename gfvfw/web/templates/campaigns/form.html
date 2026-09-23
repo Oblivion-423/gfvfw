@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ '编辑战役' if campaign else '新建战役' }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ '编辑战役' if campaign else '新建战役' }}</h1>
+    <div class="sub">战役用于把多次任务组织成一个阶段性的作战行动</div>
+  </div>
+  <a class="btn ghost" href="{{ '/campaigns/' ~ campaign.id if campaign else '/campaigns' }}">返回</a>
+</div>
+
+<form method="post"
+      action="{{ '/campaigns/' ~ campaign.id ~ '/edit' if campaign else '/campaigns/new' }}"
+      class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <h2 style="margin-top:0">基本信息</h2>
+  <div class="form-grid">
+    <div class="field">
+      <label for="name">战役名称 <span class="badge danger">必填</span></label>
+      <input type="text" id="name" name="name" required maxlength="128"
+             value="{{ form.name or '' }}" placeholder="如 2026 春季战役">
+      <span class="hint">名称需唯一</span>
+    </div>
+
+    <div class="field">
+      <label for="theater">战区 / 剧本</label>
+      <input type="text" id="theater" name="theater" maxlength="64"
+             value="{{ form.theater or '' }}" placeholder="如 Korea、Balkans">
+    </div>
+
+    <div class="field">
+      <label for="status">状态</label>
+      <select id="status" name="status">
+        {% for code, label in status_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if form.status == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="sort_order">排序权重</label>
+      <input type="text" id="sort_order" name="sort_order" value="{{ form.sort_order or 0 }}">
+      <span class="hint">数值小的排前面</span>
+    </div>
+
+    <div class="field">
+      <label for="started_at">开始日期</label>
+      <input type="date" id="started_at" name="started_at" value="{{ form.started_at or '' }}">
+    </div>
+
+    <div class="field">
+      <label for="ended_at">结束日期</label>
+      <input type="date" id="ended_at" name="ended_at" value="{{ form.ended_at or '' }}">
+      <span class="hint">未结束时留空</span>
+    </div>
+
+    <div class="field">
+      <label for="visibility">可见性</label>
+      <select id="visibility" name="visibility">
+        {% for code, label in visibility_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if form.visibility == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <span class="hint">公开可作对外战史展示</span>
+    </div>
+
+    <div class="field full">
+      <label for="summary">战役简介</label>
+      <textarea id="summary" name="summary" maxlength="4000"
+                placeholder="公开可见，描述战役背景与目标">{{ form.summary or '' }}</textarea>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">{{ '保存修改' if campaign else '创建战役' }}</button>
+    <a class="btn ghost" href="{{ '/campaigns/' ~ campaign.id if campaign else '/campaigns' }}">取消</a>
+  </div>
+</form>
+
+{% if campaign %}
+<div class="panel">
+  <h3 style="margin-top:0">危险操作</h3>
+  <form method="post" action="/campaigns/{{ campaign.id }}/delete"
+        onsubmit="return confirm('作废该战役？其下任务会被移出为未归属状态，数据不会丢失。')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="btn danger" type="submit">作废此战役</button>
+    <span class="small muted">
+      软删除：记录保留可恢复。任务会移出战役（不会删除任务与架次）。
+    </span>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}资料查询 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>资料查询</h1>
+    <div class="sub">手册、检查单、地图、涂装、教程</div>
+  </div>
+</div>
+
+<div class="flash warn">
+  <strong>此功能尚未实现。</strong>
+  当前页面是占位说明 —— 点进来看到这段文字是正常的，不是故障。
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">计划中的能力</h2>
+  <table>
+    <thead><tr><th style="width:180px">能力</th><th>说明</th><th style="width:90px">状态</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>资料上传与分类</td>
+        <td>手册 / 检查单 / 地图 / 涂装 / 教程 / 简报</td>
+        <td><span class="badge">待实现</span></td>
+      </tr>
+      <tr>
+        <td>按机型归类</td>
+        <td>与已有的机型字典关联，按机型检索资料</td>
+        <td><span class="badge">待实现</span></td>
+      </tr>
+      <tr>
+        <td>关键词检索</td>
+        <td>标题与说明的全文检索</td>
+        <td><span class="badge">待实现</span></td>
+      </tr>
+      <tr>
+        <td>版本与下载计数</td>
+        <td>资料版本管理、下载次数统计</td>
+        <td><span class="badge">待实现</span></td>
+      </tr>
+      <tr>
+        <td>可见性控制</td>
+        <td>公开 / 内部 / 指挥层三级（复用现有可见性机制）</td>
+        <td><span class="badge">待实现</span></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-bottom:0">
+    数据库表（<code>documents</code>）已建好，缺的是上传与检索界面。
+  </p>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">现在能做什么</h2>
+  <p class="small">
+    ACMI 原件已归档保存。要看回放可从任务详情页下载原件，
+    用本地 Tacview 打开 —— <strong>系统不做网页轨迹回放</strong>。
+  </p>
+  <div class="actions">
+    <a class="btn" href="/log/campaign">战役记录</a>
+    <a class="btn ghost" href="/log/pilots">飞行员个人记录</a>
+  </div>
+  {% if docs %}
+    <p class="small muted" style="margin-top:14px">
+      数据库中已有 {{ docs }} 份资料记录（界面未实现，暂不可访问）。
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

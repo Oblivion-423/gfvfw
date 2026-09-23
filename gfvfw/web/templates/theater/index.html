@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}战役管理 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>战役管理</h1>
+  <div class="sub">
+    Falcon BMS 战役存档（.cam）解析与战场态势。上传存档后即可查看队伍兵力对比、
+    目标点归属、空中/地面/海军部署，以及跨存档的战役进程。
+  </div>
+</div>
+
+{% if not bms_ok %}
+  <div class="flash warn">
+    <b>尚未配置 Falcon BMS 安装目录</b>，因此无法解析存档。<br>
+    解析 <code>.cam</code> 需要安装目录下的剧场数据表
+    （<code>Data\TerrData\Objects\Falcon4_CT.xml</code> 类表、
+    <code>Data\Campaign\CampObjData.xml</code> 目标清单等）。<br>
+    请在服务器上设置环境变量 <code>GFVFW_BMS_INSTALL_PATH</code> 指向 BMS 安装根目录
+    （例如 <code>G:\BMS\Falcon BMS 4.38</code>），然后重启服务。
+    {% if bms_path %}<br>当前配置值：<code>{{ bms_path }}</code>（该目录不存在）{% endif %}
+  </div>
+{% endif %}
+
+<div class="actions" style="margin-top:0">
+  {% if can_upload %}
+    <a class="btn" href="/theater/upload">上报战役存档</a>
+  {% endif %}
+  <span class="muted small">已入库存档 {{ total_saves }} 份</span>
+  {% if orphans %}
+    <span class="muted small">· {{ orphans }} 份未归属任何战役</span>
+  {% endif %}
+</div>
+
+{% if not rows %}
+  <div class="empty">还没有战役。{% if can_upload %}点上面的「上报战役存档」上传第一份存档。{% endif %}</div>
+{% else %}
+  <h2>战役列表</h2>
+  <table>
+    <tr>
+      <th>战役</th>
+      <th>剧场</th>
+      <th>当前时刻</th>
+      <th class="num">存档</th>
+      <th class="num">目标点</th>
+      <th class="num">单位</th>
+      <th class="num">易手</th>
+      <th>交战方</th>
+    </tr>
+    {% for ov in rows %}
+      <tr>
+        <td><a href="/theater/{{ ov.campaign.id }}">{{ ov.campaign.name }}</a></td>
+        <td>{{ ov.save.theater|or_dash if ov.save else ov.campaign.theater|or_dash }}</td>
+        <td class="nowrap">
+          {% if ov.save %}{{ ov.save.campaign_time_label }}{% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ ov.save_count }}</td>
+        <td class="num">{{ ov.save.objective_count if ov.save else 0 }}</td>
+        <td class="num">
+          {% if ov.save %}
+            {{ ov.save.flight_count + ov.save.ground_unit_count + ov.save.naval_unit_count }}
+          {% else %}0{% endif %}
+        </td>
+        <td class="num">{{ ov.change_count }}</td>
+        <td class="small">
+          {% for t in ov.teams if t.active %}
+            {% if t.owned_objectives %}
+              <span class="badge">{{ t.name }} {{ t.owned_objectives }}</span>
+            {% endif %}
+          {% endfor %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+
+<div class="panel" style="margin-top:26px">
+  <h2 style="margin-top:0">关于这块功能</h2>
+  <div class="small muted" style="line-height:1.8">
+    <b>解析来源</b>：联队上传的 BMS 战役存档 <code>.cam</code>。一份存档就是一个
+    <b>战场快照</b>——它记录当时的兵力、目标点归属、空中任务与情报事件。<br>
+    <b>存储策略</b>：每份存档都保留元数据、队伍状态与事件（构成战役进程时间线）；
+    目标点与单位的明细<b>只保留最新一份</b>，历史归属由「易手记录」重建，
+    这样 165 份存档也不会把数据库撑爆。<br>
+    <b>与「飞行记录 → 战役记录」的区别</b>：那边是本联队的战争史（谁在哪个任务里飞了什么），
+    这边是 BMS <b>战场本身</b>的态势。两者互补。<br>
+    <b>坐标口径</b>：网格 <code>0–1023</code>，原点在西南角，x=东、y=北，每格 1 km。
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}编辑任务 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>编辑任务</h1>
+    <div class="sub">
+      {{ mission.name }}
+      {% if mission.confirmed_at %}· 由归并确认于 {{ mission.confirmed_at|datetime }}{% endif %}
+    </div>
+  </div>
+  <a class="btn ghost" href="/missions/{{ mission.id }}">返回任务</a>
+</div>
+
+<div class="flash info">
+  人工修正会<strong>记录修正人与修改前后</strong>（审计日志），原始 ACMI 文件不受影响。
+  时间按 <strong>{{ DISPLAY_TZ_LABEL }}</strong> 填写。
+</div>
+
+{% if sortie_count %}
+<div class="flash warn">
+  <strong>关于「任务时长」：</strong>它由各架次的在空区间算出（多人同飞只算一次），
+  当前为 <strong>{{ mission.duration_seconds|dur }}</strong>。
+  <b>改动下面的开始/结束时间<u>不会</u>改变它</b> —— 时间窗用于展示与筛选，
+  要改实际时长，请编辑对应架次。<br>
+  <span class="small">本任务有 {{ sortie_count }} 条架次。</span>
+</div>
+{% else %}
+<div class="flash info">
+  本任务还没有架次，因此「任务时长」直接取下面的开始/结束时间之差。
+</div>
+{% endif %}
+
+<form method="post" action="/missions/{{ mission.id }}/edit" class="panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <h2 style="margin-top:0">基本信息</h2>
+  <div class="form-grid">
+    <div class="field">
+      <label for="name">任务名称</label>
+      <input type="text" id="name" name="name" maxlength="128" value="{{ form.name }}">
+    </div>
+    <div class="field">
+      <label for="mission_number">任务编号</label>
+      <input type="text" id="mission_number" name="mission_number" maxlength="32"
+             value="{{ form.mission_number }}">
+    </div>
+    <div class="field">
+      <label for="mission_type">任务类型</label>
+      <select id="mission_type" name="mission_type">
+        {% for code, label in type_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if form.mission_type == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="visibility">可见性</label>
+      <select id="visibility" name="visibility">
+        {% for code, label in visibility_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if form.visibility == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="started_at">开始（{{ DISPLAY_TZ_LABEL }}）</label>
+      <input type="datetime-local" id="started_at" name="started_at"
+             value="{{ form.started_at }}">
+    </div>
+    <div class="field">
+      <label for="ended_at">结束（{{ DISPLAY_TZ_LABEL }}）</label>
+      <input type="datetime-local" id="ended_at" name="ended_at"
+             value="{{ form.ended_at }}">
+      {% if not sortie_count %}
+        <span class="hint">本任务无架次，改动时间会重算任务时长</span>
+      {% endif %}
+    </div>
+    <div class="field">
+      <label for="base">基地</label>
+      <input type="text" id="base" name="base" maxlength="64" value="{{ form.base }}">
+    </div>
+    <div class="field">
+      <label for="outcome">结果</label>
+      <input type="text" id="outcome" name="outcome" maxlength="16" value="{{ form.outcome }}">
+    </div>
+    <div class="field full">
+      <label for="brief">任务简报</label>
+      <textarea id="brief" name="brief" rows="3">{{ form.brief }}</textarea>
+    </div>
+    <div class="field full">
+      <label for="debrief">任务总结</label>
+      <textarea id="debrief" name="debrief" rows="3">{{ form.debrief }}</textarea>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">保存修改</button>
+    <a class="btn ghost" href="/missions/{{ mission.id }}">取消</a>
+    {% if principal.can('log.delete') %}
+      <span class="spacer"></span>
+      <a class="btn danger" href="/missions/{{ mission.id }}/delete">删除任务…</a>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

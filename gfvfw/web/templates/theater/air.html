@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} 空中态势 · 战役管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ campaign.name }} · 空中态势</h1>
+  <div class="sub">{{ save.campaign_time_label }} · 中队 {{ squadrons|length }} ·
+    编队 {{ packages|length }} · 飞行 {{ flights|length }}</div>
+</div>
+
+{% include "theater/_nav.html" %}
+
+<h2>中队（战斗序列）</h2>
+{% if not squadrons %}
+  <div class="empty">这份存档里没有中队。</div>
+{% else %}
+  <table>
+    <tr>
+      <th>中队</th><th>归属</th><th>驻地</th>
+      <th class="num">兵力%</th><th class="num">出动</th>
+      <th class="num">空战</th><th class="num">对地</th>
+      <th class="num">总损失</th><th class="num">飞行员损失</th>
+    </tr>
+    {% for s in squadrons %}
+      <tr>
+        <td>{{ s.leader }}</td>
+        <td class="nowrap">{{ team_names.get(s.unit.team_id, '#' ~ s.unit.team_id) }}</td>
+        <td>{{ s.airbase }}</td>
+        <td class="num">{{ s.strength if s.strength is not none else '—' }}</td>
+        <td class="num">{{ s.missions if s.missions is not none else '—' }}</td>
+        <td class="num">{{ s.aa or 0 }}</td>
+        <td class="num">{{ s.ag or 0 }}</td>
+        <td class="num">{{ s.losses or 0 }}</td>
+        <td class="num">{{ s.pilot_losses or 0 }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+{% endif %}
+
+<h2>机型分布</h2>
+<div class="row">
+  {% for ac, n in aircraft_counts %}
+    <span class="badge">{{ ac }} {{ n }}</span>
+  {% endfor %}
+</div>
+
+<h2>任务类型分布</h2>
+<div class="row">
+  {% for m, n in mission_counts %}
+    <span class="badge">{{ m }} {{ n }}</span>
+  {% endfor %}
+</div>
+
+<h2>飞行</h2>
+{% if not flights %}
+  <div class="empty">这份存档里没有飞行。</div>
+{% else %}
+  <table>
+    <tr>
+      <th>呼号</th><th>机型</th><th>任务</th><th>归属</th>
+      <th>位置（东, 北）</th><th class="num">航路点</th>
+      <th>目标时刻</th><th class="num">损失</th><th>包/中队</th>
+    </tr>
+    {% for f in flights %}
+      <tr>
+        <td class="nowrap"><b>{{ f.callsign|or_dash }}</b></td>
+        <td>{{ f.aircraft_type|or_dash }}</td>
+        <td>{{ f.mission_name|or_dash }}</td>
+        <td class="nowrap">{{ team_names.get(f.team_id, '#' ~ f.team_id) }}</td>
+        <td class="mono">{{ f.grid_x|round(0)|int }}, {{ f.grid_y|round(0)|int }}</td>
+        <td class="num">{{ f.current_wp }}/{{ f.total_wp }}</td>
+        <td class="nowrap mono">
+          {% if f.tot_ms %}{{ f.tot_ms }}{% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ f.losses }}</td>
+        <td class="mono small">
+          {{ f.package_unit_id or '—' }} / {{ f.squadron_unit_id or '—' }}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  <div class="small muted" style="margin-top:8px">
+    「目标时刻」是档案里的毫秒时间戳（战役内时间），暂未换算成 Day/HH:MM 显示。
+  </div>
+{% endif %}
+
+<h2>编队</h2>
+{% if packages %}
+  <table>
+    <tr>
+      <th>编队</th><th>归属</th><th>位置（东, 北）</th>
+      <th class="num">飞行数</th><th>状态</th>
+      <th>进/出航点</th><th>目标点</th>
+      <th class="num">请求/应答</th><th>支援</th>
+    </tr>
+    {% for p in packages %}
+      <tr>
+        <td class="mono">#{{ p.unit.unit_id }}</td>
+        <td class="nowrap">{{ team_names.get(p.unit.team_id, '#' ~ p.unit.team_id) }}</td>
+        <td class="mono">{{ p.unit.grid_x|round(0)|int }}, {{ p.unit.grid_y|round(0)|int }}</td>
+        <td class="num">{{ p.flights if p.flights is not none else '—' }}</td>
+        <td>
+          {% if p.is_final %}
+            <span class="badge">已结束</span>
+          {% else %}
+            <span class="badge ok">进行中</span>
+          {% endif %}
+        </td>
+        <td class="mono small">
+          {{ p.ingress[0] }},{{ p.ingress[1] }} → {{ p.egress[0] }},{{ p.egress[1] }}
+        </td>
+        <td class="mono small">{{ p.target[0] }},{{ p.target[1] }}</td>
+        <td class="num small">{{ p.requests or 0 }} / {{ p.responses or 0 }}</td>
+        <td class="small mono nowrap">
+          {% if p.awacs %}预警 {{ p.awacs }}{% endif %}
+          {% if p.tanker %} 加油机 {{ p.tanker }}{% endif %}
+          {% if p.interceptor %} 拦截 {{
+             p.interceptor }}{% endif %}
+          {% if not (p.awacs or p.tanker or p.interceptor) %}<span class="muted">—</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  <div class="small muted" style="margin-top:8px">
+    「状态」按编队标记位判定：已结束 = 该编队的任务已收尾（BMS 的 final 分支）。
+    结束的编队不携带进/出航点，故坐标显示为 0,0。
+  </div>
+{% else %}
+  <div class="empty">这份存档里没有编队。</div>
+{% endif %}
+{% endblock %}

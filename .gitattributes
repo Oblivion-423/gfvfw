@@ -1,0 +1,29 @@
+# 开发在 Windows，部署在 Linux —— 行尾必须统一成 LF。
+#
+# ⚠️ 不加这个文件的话，Windows 上 checkout 出来的是 CRLF，而：
+#    * deploy/update.sh 的 shebang 会变成 "#!/usr/bin/env bash\r"，
+#      Linux 直接报 bad interpreter: /usr/bin/env bash^M；
+#    * deploy/gfvfw.service、deploy/Caddyfile 里带 \r 的行也会被
+#      systemd / Caddy 判为非法指令。
+# 这类问题在 Windows 本地完全看不出来，只在服务器上炸。
+* text=auto eol=lf
+
+# 二进制文件不要做行尾转换
+*.png   binary
+*.jpg   binary
+*.zip   binary
+*.sqlite3 binary
+*.cam   binary
+*.acmi  binary
+
+# 明确要求 LF 的脚本与配置（双保险，语义更清楚）
+*.sh        text eol=lf
+*.py        text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.md        text eol=lf
+Caddyfile   text eol=lf
+*.service   text eol=lf
+
+# Git 在 diff 时把 *.sh 当 shell 语法高亮
+*.sh diff=bash

@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ mission.name }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ mission.name }}</h1>
+    <div class="sub">
+      {{ mission.started_at|datetime }} 起（UTC+8）
+      {% if mission.ended_at %} · 历时 {{ mission.duration_seconds|dur }}{% endif %}
+      · {{ type_labels.get(mission.mission_type, mission.mission_type) }}
+      {% if campaign %} · 战役 <a href="/campaigns/{{ campaign.id }}">{{ campaign.name }}</a>{% endif %}
+    </div>
+  </div>
+  <div class="row">
+    {% if principal.can('log.approve') %}
+      <a class="btn" href="/missions/{{ mission.id }}/sorties/new">补录架次</a>
+    {% endif %}
+    {% if principal.can('log.edit.any') %}
+      <a class="btn ghost" href="/missions/{{ mission.id }}/edit">编辑任务</a>
+    {% endif %}
+    {% if principal.can('log.delete') %}
+      <a class="btn danger" href="/missions/{{ mission.id }}/delete">删除任务</a>
+    {% endif %}
+    <a class="btn ghost" href="/missions">返回任务列表</a>
+  </div>
+</div>
+
+{% if can_manage_campaign %}
+<div class="panel tight">
+  <form method="post" action="/missions/{{ mission.id }}/campaign" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="campaign_id" class="small muted" style="min-width:80px">所属战役</label>
+    <select id="campaign_id" name="campaign_id" style="max-width:320px">
+      <option value="">（不归入战役）</option>
+      {% for c in campaigns %}
+        <option value="{{ c.id }}" {{ 'selected' if mission.campaign_id == c.id else '' }}>
+          {{ c.name }}{% if c.theater %} · {{ c.theater }}{% endif %}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" type="submit">保存</button>
+    <span class="small muted">留空即移出战役（任务与架次不会删除）</span>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2 style="margin-top:0">概览</h2>
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ sorties|length }}</span><span class="k">参战架次</span></div>
+    {# ⚠️ 任务时长只算一次；飞行员累计是各人之和（人次）。两者含义不同。 #}
+    <div class="stat"><span class="v">{{ agg.flight_once|dur }}</span><span class="k">任务时长</span></div>
+    <div class="stat"><span class="v">{{ agg.flight|dur }}</span><span class="k">飞行员累计</span></div>
+    <div class="stat"><span class="v">{{ agg.distance|distance }}</span><span class="k">总航程</span></div>
+    <div class="stat"><span class="v">{{ agg.weapons }}</span><span class="k">武器投放</span></div>
+    <div class="stat"><span class="v">{{ agg.deaths }}</span><span class="k">战损</span></div>
+    <div class="stat"><span class="v">{{ agg.landings }}/{{ agg.takeoffs }}</span><span class="k">降落/起飞</span></div>
+  </div>
+  <div class="small muted" style="margin-top:10px">
+    「任务时长」= 本任务占用的时间（多人同时飞只算一次）；
+    「飞行员累计」= 各人参战时长之和。下方架次明细里的每行是各人自己的时长。
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">架次明细</h2>
+  {% if sorties %}
+  <table>
+    <thead>
+      <tr>
+        <th>飞行员</th><th>机型</th><th>阵营</th>
+        <th class="num">时长</th><th class="num">航程</th>
+        <th class="num">起降</th><th class="num">武器</th>
+        <th>状态</th><th>数据</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sorties %}
+      <tr>
+        <td>
+          {% if s.unclaimed %}
+            <span title="未认领到名册，不计入个人统计">{{ s.callsign }}</span>
+            <span class="badge warn">未认领</span>
+          {% else %}
+            <a href="/members/{{ s.member_id }}">{{ s.callsign }}</a>
+          {% endif %}
+          {% if s.data_source == 'manual' %}<span class="badge warn">手动</span>{% endif %}
+        </td>
+        <td class="small">{{ s.aircraft }}</td>
+        <td class="small muted">{{ s.coalesce or '—' }}</td>
+        <td class="num">{{ s.flight_seconds|dur }}</td>
+        <td class="num">{{ s.distance_meters|distance }}</td>
+        <td class="num">{{ s.landing_count }}/{{ s.takeoff_count }}</td>
+        <td class="num">{{ s.weapons_fired }}</td>
+        <td>
+          {% if s.crashed %}<span class="badge danger">坠毁</span>
+          {% elif s.deaths %}<span class="badge danger">被击落</span>
+          {% elif s.landing_count %}<span class="badge ok">已降落</span>
+          {% elif s.end_cas_kts is not none and s.end_cas_kts > 30 %}
+            <span class="badge warn">未落地</span>
+          {% else %}<span class="badge">—</span>{% endif %}
+          {% if s.exceedance_count %}<span class="badge warn">超限×{{ s.exceedance_count }}</span>{% endif %}
+        </td>
+        <td><span class="badge {{ confidence_badge.get(s.data_confidence,'') }}">
+          {{ confidence_labels.get(s.data_confidence, s.data_confidence) }}</span></td>
+        <td class="nowrap">
+          {% if s.editable %}
+            <a class="small" href="/sorties/{{ s.id }}/edit">编辑</a>
+          {% else %}
+            <span class="small muted" title="只能编辑自己的架次">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">
+    本任务没有架次记录。<br>
+    <span class="small">可能原因：ACMI 中的飞行员名尚未认领到名册 ——
+    认领后架次会自动出现（入口在下方「ACMI 工作台」的认领阶段）。<br>
+    若是忘记录制或文件丢失，可由教官/指挥用右上角「补录架次」手动补一条。</span>
+  </div>
+  {% endif %}
+</div>
+
+{% if events %}
+<div class="panel">
+  <h2 style="margin-top:0">事件流水</h2>
+  <table>
+    <thead><tr><th>时间</th><th>飞行员</th><th>事件</th><th>详情</th></tr></thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td class="small muted nowrap">{{ e.event.occurred_at|datetime }}</td>
+        <td>{{ e.callsign or '—' }}</td>
+        <td><span class="badge {{ 'danger' if e.event.event_type in ('shot_down','crash') else ('warn' if 'exceedance' in e.event.event_type else '') }}">
+          {{ event_labels.get(e.event.event_type, e.event.event_type) }}</span></td>
+        <td class="small muted">{{ e.event.detail or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<div class="panel">
+  <h2 style="margin-top:0">归档文件（{{ files|length }}）</h2>
+  <table>
+    <thead><tr><th>文件</th><th class="num">大小</th><th>录制起点</th>
+               <th class="num">行数</th><th class="num">带名/无名AI</th></tr></thead>
+    <tbody>
+      {% for f in files %}
+      <tr>
+        <td class="small">{{ f.original_filename }}</td>
+        <td class="num">{{ f.size_bytes|filesize }}</td>
+        <td class="small muted">{{ f.recorded_start_at|datetime }}</td>
+        <td class="num">{{ f.line_count }}</td>
+        <td class="num">{{ f.objects_with_pilot_name }}/{{ f.unnamed_ai_actors }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-bottom:0">
+    原始 ACMI 已归档保存。需要看回放请下载原件，用本地 Tacview 打开
+    （系统不做网页轨迹回放）。
+  </p>
+</div>
+
+{% if mission.brief or mission.debrief %}
+<div class="panel">
+  <h2 style="margin-top:0">任务简报与战报</h2>
+  {% if mission.brief %}<h3>简报</h3>
+    <p style="white-space:pre-wrap">{{ mission.brief }}</p>{% endif %}
+  {% if mission.debrief %}<h3>战报</h3>
+    <p style="white-space:pre-wrap">{{ mission.debrief }}</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

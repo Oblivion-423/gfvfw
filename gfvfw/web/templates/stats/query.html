@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}飞行日志查询 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>飞行日志查询</h1>
+    <div class="sub">时长单位：小时/分　·　航程单位：海里（NM）</div>
+  </div>
+  <a class="btn ghost" href="/stats">统计总览</a>
+</div>
+
+<form method="get" action="/log" class="panel">
+  <h2 style="margin-top:0">筛选条件</h2>
+  <div class="form-grid">
+    <div class="field">
+      <label for="callsign">呼号 / ACMI 名</label>
+      <input type="text" id="callsign" name="callsign" value="{{ q.callsign }}"
+             placeholder="支持片段匹配，含未认领的名字">
+    </div>
+
+    <div class="field">
+      <label for="member_id">指定成员</label>
+      <select id="member_id" name="member_id">
+        <option value="">全部</option>
+        {% for m in options.members %}
+          <option value="{{ m.id }}" {{ 'selected' if q.member_id == m.id else '' }}>
+            {{ m.callsign }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="aircraft_type_id">标准机型</label>
+      <select id="aircraft_type_id" name="aircraft_type_id">
+        <option value="">全部</option>
+        {% for a in options.aircraft_types %}
+          <option value="{{ a.id }}" {{ 'selected' if q.aircraft_type_id == a.id else '' }}>
+            {{ a.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="aircraft_raw">ACMI 机型名</label>
+      <input type="text" id="aircraft_raw" name="aircraft_raw"
+             value="{{ q.aircraft_raw }}" list="rawlist" placeholder="如 F-16C">
+      <datalist id="rawlist">
+        {% for r in options.aircraft_raw_names %}<option value="{{ r }}">{% endfor %}
+      </datalist>
+    </div>
+
+    <div class="field">
+      <label for="mission_type">任务类型</label>
+      <select id="mission_type" name="mission_type">
+        <option value="">全部</option>
+        {% for code, label in type_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if q.mission_type == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {% if options.campaigns %}
+    <div class="field">
+      <label for="campaign_id">战役</label>
+      <select id="campaign_id" name="campaign_id">
+        <option value="">全部</option>
+        {% for c in options.campaigns %}
+          <option value="{{ c.id }}" {{ 'selected' if q.campaign_id == c.id else '' }}>
+            {{ c.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+
+    <div class="field">
+      <label for="date_from">起始日期（UTC+8）</label>
+      <input type="date" id="date_from" name="date_from" value="{{ q.date_from }}">
+    </div>
+
+    <div class="field">
+      <label for="date_to">结束日期（UTC+8）</label>
+      <input type="date" id="date_to" name="date_to" value="{{ q.date_to }}">
+      <span class="hint">含当天</span>
+    </div>
+
+    <div class="field">
+      <label for="confidence">数据可信度</label>
+      <select id="confidence" name="confidence">
+        <option value="">全部</option>
+        {% for code, label in confidence_labels.items() %}
+          <option value="{{ code }}" {{ 'selected' if q.confidence == code else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="include_unclaimed">未认领架次</label>
+      <select id="include_unclaimed" name="include_unclaimed">
+        <option value="1" {{ 'selected' if q.include_unclaimed else '' }}>包含</option>
+        <option value="0" {{ 'selected' if not q.include_unclaimed else '' }}>排除</option>
+      </select>
+      <span class="hint">未认领者无成绩归属方</span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">查询</button>
+    <a class="btn ghost" href="/log">重置条件</a>
+    {% if filtered %}
+      <span class="small muted">已应用筛选</span>
+    {% endif %}
+  </div>
+</form>
+
+{% if rows %}
+<div class="panel tight">
+  <div class="row">
+    <span>匹配 <strong>{{ total }}</strong> 条{% if shown < total %}，显示前 {{ shown }} 条{% endif %}</span>
+    <span class="spacer"></span>
+    <span class="small">
+      合计：<strong>{{ totals.flight_seconds|dur }}</strong>
+      　·　<strong>{{ totals.distance_nm|round|int }} NM</strong>
+      　·　起降 {{ totals.landings }}/{{ totals.takeoffs }}
+      　·　武器 {{ totals.weapons }}
+      　·　战损 {{ totals.deaths }}
+    </span>
+  </div>
+</div>
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <table>
+    <thead>
+      <tr>
+        <th>起飞时间（UTC+8）</th>
+        <th>飞行员</th>
+        <th>机型</th>
+        <th>任务</th>
+        <th class="num">时长</th>
+        <th class="num">航程</th>
+        <th class="num">起降</th>
+        <th class="num">武器</th>
+        <th>状态</th>
+        <th>数据</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="small nowrap">{{ r.takeoff_at|datetime }}</td>
+        <td>
+          {% if r.unclaimed %}
+            {{ r.callsign }} <span class="badge warn">未认领</span>
+          {% else %}
+            <a href="/members/{{ r.member_id }}">{{ r.callsign }}</a>
+          {% endif %}
+        </td>
+        <td class="small" title="{{ r.aircraft_raw }}">{{ r.aircraft_raw or '—' }}</td>
+        <td class="small"><a href="/missions/{{ r.mission_id }}">{{ r.mission_name }}</a></td>
+        <td class="num">{{ r.flight_seconds|dur }}</td>
+        <td class="num">{{ r.distance_meters|nm }} NM</td>
+        <td class="num">{{ r.landing_count }}/{{ r.takeoff_count }}</td>
+        <td class="num">{{ r.weapons_fired }}</td>
+        <td>
+          {% if r.crashed %}<span class="badge danger">坠毁</span>
+          {% elif r.deaths %}<span class="badge danger">被击落</span>
+          {% elif r.landing_count %}<span class="badge ok">已降落</span>
+          {% else %}<span class="badge">—</span>{% endif %}
+          {% if r.exceedance_count %}<span class="badge warn">超限</span>{% endif %}
+        </td>
+        <td><span class="badge {{ confidence_badge.get(r.data_confidence,'') }}">
+          {{ confidence_labels.get(r.data_confidence, r.data_confidence) }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">
+  {% if filtered %}
+    没有符合条件的架次记录。<br><span class="small">试试放宽筛选条件。</span>
+  {% else %}
+    还没有任何架次记录。<br><br>
+    <span class="small muted">数据录入入口已临时隐藏</span>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

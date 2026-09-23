@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} 战役进程 · 战役管理{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>{{ campaign.name }} · 战役进程</h1>
+  <div class="sub">
+    存档 {{ saves|length }} 份 · 目标点易手 {{ changes|length }} 次
+    {% if saves %} · 从 {{ saves[0].campaign_time_label }} 到 {{ saves[-1].campaign_time_label }}{% endif %}
+  </div>
+</div>
+
+{% include "theater/_nav.html" %}
+
+{% if not saves %}
+  <div class="empty">这个战役还没有存档。上传多份存档后，这里会形成进程时间线。</div>
+{% else %}
+
+<h2>目标点归属走势</h2>
+{% if not series %}
+  <div class="empty">各存档里都没有队伍占有目标点，无法画出走势。</div>
+{% else %}
+  {% set maxv = namespace(v=1) %}
+  {% for tid, pts in series.items() %}
+    {% for label, v in pts %}{% if v > maxv.v %}{% set maxv.v = v %}{% endif %}{% endfor %}
+  {% endfor %}
+  <div class="panel tight">
+    {% for tid, pts in series.items() %}
+      <div class="row" style="gap:10px;margin-bottom:4px">
+        <span class="small nowrap" style="min-width:120px">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:2px;
+                       background:{{ palette[tid % 8] }};margin-right:5px"></span>
+          {{ team_names.get(tid, '#' ~ tid) }}
+        </span>
+        <span class="spacer">
+          {% for label, v in pts %}
+            <span title="{{ label }}: {{ v }} 个目标点"
+                  style="display:inline-block;vertical-align:bottom;
+                         width:{{ (100 / (pts|length))|round(2) }}%;
+                         height:{{ (4 + 34 * v / maxv.v)|round(0) }}px;
+                         background:{{ palette[tid % 8] }};opacity:.85;
+                         margin-right:1px"></span>
+          {% endfor %}
+        </span>
+        <span class="small num nowrap" style="min-width:150px">
+          {{ pts[0][1] }} → <b>{{ pts[-1][1] }}</b>
+          {% set d = pts[-1][1] - pts[0][1] %}
+          <span class="{{ 'badge ok' if d > 0 else ('badge danger' if d < 0 else 'badge') }}">
+            {{ '+' if d > 0 else '' }}{{ d }}
+          </span>
+        </span>
+      </div>
+    {% endfor %}
+    <div class="small muted" style="margin-top:8px">
+      每根柱 = 一份存档；高度 = 该队伍当时占有的目标点数（最高 {{ maxv.v }}）。
+      鼠标悬停可看到具体时刻与数量。
+    </div>
+  </div>
+{% endif %}
+
+<h2>谁在推进</h2>
+{% if grabs %}
+  <table>
+    <tr><th>夺取方</th><th>原归属</th><th class="num">次数</th></tr>
+    {% for (to_t, from_t), n in grabs %}
+      <tr>
+        <td><b>{{ team_names.get(to_t, '#' ~ to_t) }}</b></td>
+        <td>{{ '中立 / 无主' if from_t < 0 else team_names.get(from_t, '#' ~ from_t) }}</td>
+        <td class="num">{{ n }}</td>
+      </tr>
+    {% endfor %}
+  </table>
+  <div class="small muted" style="margin-top:8px">
+    只统计<b>相邻两份存档之间</b>发生的易手。多数是「中立 → 某方」，
+    即战役初期各方接管设施；「某方 → 另一方」才是真正的争夺。
+  </div>
+{% else %}
+  <div class="empty">还没有检测到目标点易手。</div>
+{% endif %}
+
+<h2>易手明细</h2>
+{% if changes %}
+  <table>
+    <tr><th>时刻</th><th>目标点</th><th>类型</th><th>归属变化</th></tr>
+    {% for c in changes[:200] %}
+      <tr>
+        <td class="nowrap">{{ c.at_campaign_time_label }}</td>
+        <td>{{ c.objective_name|or_dash }}</td>
+        <td>{{ c.type_name|or_dash }}</td>
+        <td class="nowrap">
+          <span class="muted">{{ '中立' if c.from_team < 0 else team_names.get(c.from_team, '#' ~ c.from_team) }}</span>
+          → <b>{{ '中立' if c.to_team < 0 else team_names.get(c.to_team, '#' ~ c.to_team) }}</b>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  {% if changes|length > 200 %}
+    <div class="small muted" style="margin-top:8px">仅显示最近 200 条。</div>
+  {% endif %}
+{% endif %}
+
+<h2>存档时间线</h2>
+<table>
+  <tr>
+    <th>时刻</th><th>存档文件</th>
+    <th class="num">目标点</th><th class="num">飞行</th>
+    <th class="num">地面</th><th class="num">海军</th>
+    <th>占有情况</th>
+  </tr>
+  {% for s in saves %}
+    <tr>
+      <td class="nowrap">{{ s.campaign_time_label }}</td>
+      <td class="mono small">{{ s.original_filename }}</td>
+      <td class="num">{{ s.objective_count }}</td>
+      <td class="num">{{ s.flight_count }}</td>
+      <td class="num">{{ s.ground_unit_count }}</td>
+      <td class="num">{{ s.naval_unit_count }}</td>
+      <td class="small">
+        {% set owned = s.owned_by_team_json|fromjson if s.owned_by_team_json else {} %}
+        {% for tid, n in owned.items() %}
+          <span class="badge">{{ team_names.get(tid|int, '#' ~ tid) }} {{ n }}</span>
+        {% endfor %}
+      </td>
+    </tr>
+  {% endfor %}
+</table>
+
+<h2>胜负评估</h2>
+<div class="panel tight">
+  <div class="small" style="line-height:1.9">
+    {% set last = saves[-1] %}
+    <b>当前态势</b>：战役内时刻 <b>{{ last.campaign_time_label }}</b>，
+    第 {{ last.campaign_day }} 天，态势码 {{ last.situation }}，
+    {% if last.endgame_result %}
+      <span class="badge danger">已出结果（endgameResult = {{ last.endgame_result }}）</span>
+    {% else %}
+      <span class="badge ok">战役仍在进行</span>
+    {% endif %}
+    <br>
+    <b>目标点控制</b>：
+    {% set owned = last.owned_by_team_json|fromjson if last.owned_by_team_json else {} %}
+    {% set total_owned = owned.values()|sum if owned else 0 %}
+    {% if owned %}
+      {% for tid, n in owned.items() %}
+        {{ team_names.get(tid|int, '#' ~ tid) }} {{ n }}{% if not loop.last %} · {% endif %}
+      {% endfor %}
+      （共 {{ total_owned }} / {{ last.objective_count }} 个目标点有明确归属，
+      其余为中立设施）
+    {% else %}
+      无队伍占有目标点。
+    {% endif %}
+    <br>
+    <b>兵力消耗</b>：
+    {% for tid, pts in series.items() %}
+      {% set first_save = saves[0] %}
+    {% endfor %}
+    见「总览」页的起始兵力 → 当前兵力对照。
+  </div>
+  <div class="small muted" style="margin-top:10px">
+    ⚠️ 这里给出的是<b>从存档数据直接读出的态势</b>，不是联队自定义的胜负判定规则。
+    BMS 自己的胜负由 <code>endgameResult</code> 与阵营目标（victory points）决定；
+    若联队另有判定口径（例如按目标点占比或战损比），
+    请把规则写进需求，我再据此实现评分。
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}

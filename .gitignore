@@ -1,0 +1,45 @@
+# ---- 运行时数据（绝不提交）----
+# 包含 SQLite 数据库、上传的 ACMI/资料文件、备份包
+var/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- 测试与覆盖率 ----
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ---- 环境与密钥 ----
+# ⚠️ 生产环境密钥通过环境变量注入，绝不入库
+.env
+.env.*
+!.env.example
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+
+# ---- 临时产物 ----
+*.log
+*.tmp
+
+# 参考源码（CamReader / SITREP 的解压产物，第三方代码，不入库）
+reference/
+*.zip

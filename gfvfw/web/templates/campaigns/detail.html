@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ campaign.name }}</h1>
+    <div class="sub">
+      <span class="badge {{ status_badge.get(campaign.status,'') }}">
+        {{ status_labels.get(campaign.status, campaign.status) }}</span>
+      {% if campaign.theater %} · 战区 {{ campaign.theater }}{% endif %}
+      {% if campaign.started_at %}
+        · {{ campaign.started_at|date }}
+        {% if campaign.ended_at %} ~ {{ campaign.ended_at|date }}（进行中）{% endif %}
+      {% endif %}
+      · {{ visibility_labels.get(campaign.visibility, campaign.visibility) }}
+    </div>
+  </div>
+  <div class="row">
+    {% if can_manage %}<a class="btn" href="/campaigns/{{ campaign.id }}/edit">编辑</a>{% endif %}
+    <a class="btn ghost" href="/campaigns">返回列表</a>
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">战役汇总</h2>
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ totals.missions }}</span><span class="k">任务数</span></div>
+    <div class="stat"><span class="v">{{ totals.sorties }}</span><span class="k">总架次</span></div>
+    <div class="stat"><span class="v">{{ totals.flight_seconds|dur }}</span><span class="k">总飞行时长</span></div>
+    <div class="stat"><span class="v">{{ totals.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
+    <div class="stat"><span class="v">{{ pilots|length }}</span><span class="k">参战成员</span></div>
+    <div class="stat"><span class="v">{{ totals.deaths }}</span><span class="k">战损</span></div>
+  </div>
+</div>
+
+{% if campaign.summary %}
+<div class="panel">
+  <h2 style="margin-top:0">战役简介</h2>
+  <p style="white-space:pre-wrap;margin:0">{{ campaign.summary }}</p>
+</div>
+{% endif %}
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0">
+    <h2 style="margin:0">任务列表（{{ missions|length }}）</h2>
+  </div>
+  {% if missions %}
+  <table>
+    <thead>
+      <tr><th>任务时间（UTC+8）</th><th>名称</th><th>类型</th>
+          <th class="num">架次</th><th class="num">时长</th>
+          <th class="num">航程</th><th class="num">战损</th>
+          {% if can_manage %}<th></th>{% endif %}</tr>
+    </thead>
+    <tbody>
+      {% for m in missions %}
+      <tr>
+        <td class="small nowrap">{{ m.mission.started_at|datetime }}</td>
+        <td><a href="/missions/{{ m.mission.id }}">{{ m.mission.name }}</a></td>
+        <td class="small">{{ type_labels.get(m.mission.mission_type, m.mission.mission_type) }}</td>
+        <td class="num">{{ m.sorties }}</td>
+        <td class="num">{{ m.flight_seconds|dur }}</td>
+        <td class="num">{{ m.distance_nm|round|int }} NM</td>
+        <td class="num">{{ m.deaths }}</td>
+        {% if can_manage %}
+        <td>
+          <form method="post"
+                action="/campaigns/{{ campaign.id }}/detach/{{ m.mission.id }}"
+                onsubmit="return confirm('把该任务移出战役？任务本身不会被删除。')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn ghost" type="submit">移出</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty" style="margin:16px">
+    此战役还没有任务。
+  </div>
+  {% endif %}
+</div>
+
+{% if can_manage and unassigned %}
+<div class="panel">
+  <h2 style="margin-top:0">把任务归入本战役</h2>
+  <p class="small muted" style="margin-top:-6px">
+    以下是尚未归入任何战役的任务。勾选后点"归入"即可。
+  </p>
+  <form method="post" action="/campaigns/{{ campaign.id }}/assign">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:38px"><input type="checkbox" id="checkAll"></th>
+          <th>任务时间</th><th>名称</th><th>类型</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in unassigned %}
+        <tr>
+          <td><input type="checkbox" name="mission_ids" value="{{ m.id }}" class="mc"></td>
+          <td class="small nowrap">{{ m.started_at|datetime }}</td>
+          <td><a href="/missions/{{ m.id }}">{{ m.name }}</a></td>
+          <td class="small">{{ type_labels.get(m.mission_type, m.mission_type) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="actions">
+      <button class="btn" type="submit" id="assignBtn" disabled>归入选中的任务</button>
+      <span class="small muted" id="assignHint">请先勾选任务</span>
+    </div>
+  </form>
+  <script>
+  (function () {
+    var cs = Array.prototype.slice.call(document.querySelectorAll('.mc'));
+    var all = document.getElementById('checkAll');
+    var btn = document.getElementById('assignBtn');
+    var hint = document.getElementById('assignHint');
+    function refresh() {
+      var n = cs.filter(function (c) { return c.checked; }).length;
+      btn.disabled = n === 0;
+      hint.textContent = n ? ('将归入 ' + n + ' 个任务') : '请先勾选任务';
+      if (all) { all.checked = n === cs.length && cs.length > 0;
+                 all.indeterminate = n > 0 && n < cs.length; }
+    }
+    if (all) all.addEventListener('change', function () {
+      cs.forEach(function (c) { c.checked = all.checked; }); refresh(); });
+    cs.forEach(function (c) { c.addEventListener('change', refresh); });
+    refresh();
+  })();
+  </script>
+</div>
+{% endif %}
+
+{% if pilots %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">参战成员</h2></div>
+  <table>
+    <thead><tr><th>呼号</th><th>状态</th><th class="num">架次</th>
+               <th class="num">本战役时长</th><th class="num">本战役航程</th></tr></thead>
+    <tbody>
+      {% for p in pilots %}
+      <tr>
+        <td><a href="/members/{{ p.member_id }}">{{ p.callsign }}</a></td>
+        <td><span class="badge {{ {'active':'ok','reserve':'warn'}.get(p.status,'') }}">
+          {{ {'active':'现役','reserve':'休整','retired':'退役','probation':'预备'}.get(p.status, p.status) }}</span></td>
+        <td class="num">{{ p.sorties }}</td>
+        <td class="num">{{ p.flight_seconds|dur }}</td>
+        <td class="num">{{ p.distance_nm|round|int }} NM</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if aircraft %}
+<div class="panel" style="padding:0;overflow:hidden">
+  <div style="padding:16px 18px 0"><h2 style="margin:0">机型分布</h2></div>
+  <table>
+    <thead><tr><th>机型</th><th class="num">架次</th><th class="num">时长</th></tr></thead>
+    <tbody>
+      {% for a in aircraft %}
+      <tr>
+        <td class="small">{{ a.raw }}</td>
+        <td class="num">{{ a.sorties }}</td>
+        <td class="num">{{ a.flight_seconds|dur }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

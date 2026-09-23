@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="auth-wrap" style="margin-top:80px">
+  <div class="panel" style="text-align:center">
+    <h1 style="font-size:34px;margin-bottom:6px">{{ code }}</h1>
+    <p class="muted" style="margin:0 0 18px">{{ message }}</p>
+
+    {% if needed %}
+      <p class="small muted">
+        此操作需要权限：
+        {% for p in needed %}<span class="badge">{{ p }}</span> {% endfor %}
+      </p>
+      <p class="small muted">
+        你当前的身份是「{{ principal.primary_role_name }}」。
+        如需该权限，请联系联队管理员。
+      </p>
+    {% endif %}
+
+    <div class="actions" style="justify-content:center">
+      <a class="btn ghost" href="/">返回首页</a>
+      {% if not principal.is_authenticated %}
+        <a class="btn" href="/login">登录</a>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
