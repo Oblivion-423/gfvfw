@@ -100,19 +100,8 @@
           {% else %}—{% endif %}
         </td>
       </tr>
-      <tr>
-        <th>资质</th>
-        <td>
-          {% set held = qualifications | selectattr('id', 'in', held_qualification_ids) | list %}
-          {% if held %}
-            {% for q in held %}
-              <span class="badge">{{ q.name }}</span>
-            {% endfor %}
-          {% else %}
-            <span class="muted">无</span>
-          {% endif %}
-        </td>
-      </tr>
+      {# 资质一行本轮移除：Logbook 不提供资质，而系统也没有授予入口，
+        留着只会永久显示一个「无」。数据层保留，将来要显示再加回来。 #}
     </tbody>
   </table>
   <p class="small muted" style="margin:10px 0 0">

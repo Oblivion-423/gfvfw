@@ -112,26 +112,11 @@
   {% endif %}
 </div>
 
-<div class="panel">
-  <h2 style="margin-top:0">资质</h2>
-  {% if qualifications %}
-    <table>
-      <thead><tr><th>资质</th><th>类别</th><th>授予日期</th><th>来源</th></tr></thead>
-      <tbody>
-        {% for q in qualifications %}
-        <tr>
-          <td>{{ q.name }}</td>
-          <td class="muted small">{{ q.category }}</td>
-          <td class="muted small">{{ q.granted_at|date }}</td>
-          <td><span class="badge">{{ source_labels.get(q.source, q.source) }}</span></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p class="muted small" style="margin:0">
-      暂无资质记录。<span class="hint">资质目前由管理员手工录入，与军衔相互独立。</span>
-    </p>
-  {% endif %}
-</div>
+{# ------------------------------------------------------------------ #}
+{# 资质面板：**本轮暂时移除**（联队口径：资质与教官相关功能暂不需要）。
+   为什么不是留着：资质目前**只有展示、没有任何授予入口** ——
+   留着的话每个成员页都会永久显示「暂无资质记录。资质目前由管理员手工录入」，
+   而那句话是假的（没有手填界面）。宁可不显示，也不要在页面上说假话。
+   数据层（qualification / member_qualifications 两张表 + 路由里的查询）
+   **完全保留**，将来要做时把这个面板加回来即可。 #}
 {% endblock %}
