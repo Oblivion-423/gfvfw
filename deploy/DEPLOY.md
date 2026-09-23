@@ -34,13 +34,27 @@ systemctl is-active firewalld      # 防火墙是否在跑
 **系统准备（替代正文第 1 步）**
 
 ```bash
-sudo dnf install -y python3 python3-pip rsync git
+sudo dnf install -y python3 python3-pip rsync git \
+  gcc libpq-devel make
 
 # ⚠️ 如果 python3 --version 低于 3.10，装一个够新的：
-sudo dnf install -y python3.11 python3.11-pip   # Alinux 3 / Rocky 8+ 一般有
+sudo dnf install -y python3.11 python3.11-devel python3.11-pip
 # 或走模块：sudo dnf module install -y python311/common
 # 之后所有命令里的 python3 都要换成 python3.11
 ```
+
+> 实测（Alibaba Cloud Linux 3 / OpenAnolis）：
+> ```
+> python3 --version          → Python 3.6.8        ✗ 太旧
+> python3.11 --version       → Python 3.11.13      ✓ 用这个
+> python3.11-pip 22.3.1      ✓ 已随 python3.11 提供
+> getenforce                 → Disabled           ✓ 不用管 SELinux
+> systemctl is-active firewalld → 空（未运行）      ✓ 只需配 ECS 安全组
+> ```
+> ⚠️ `python3.11-devel` 提供 `Python.h`。**不装它 `pip install` 会在编译
+> `psycopg2` 时报 `fatal error: Python.h: No such file or directory`**；
+> `libpq-devel` 提供 `pg_config`，缺了报 `pg_config executable not found`。
+> 两个都不是可选项，原因见正文第 1 步的说明。
 
 **防火墙（替代第 0 步"端口开放"）**
 
@@ -156,10 +170,27 @@ sudo install -d -m 750 /etc/gfvfw
 安装运行依赖：
 
 ```bash
+# Debian / Ubuntu
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip rsync
+sudo apt install -y python3 python3-venv python3-pip rsync \
+  gcc python3-dev libpq-dev
 python3 --version                # 需要 3.10+
 ```
+
+> ⚠️ **`gcc` / `python3-dev` / `libpq-dev` 这三个不是可选项。**
+> `requirements.txt` 里的 `SQLAlchemy[postgresql]` 会拉入 **`psycopg2`（源码包，
+> 没有预编译 wheel）**，pip 必须现场编译它 —— 缺 `gcc` 或 `pg_config` 时
+> `pip install` 会直接失败。而那个 extra 是**故意**装的：
+> 它启用 SQLAlchemy 的跨方言类型校验，使"在 SQLite 上使用 SQLite 专有语法"
+> 被**机制性拒绝**而不是靠口头约定（见 `requirements.txt` 注释与
+> `docs/database-design.md §0`）。所以不要为了省事把它删掉。
+>
+> 症状长这样：
+> ```
+> Error: pg_config executable not found.
+>     Please add the directory containing pg_config to the PATH
+> ```
+> 或 `fatal error: Python.h: No such file or directory`。
 
 ---
 
@@ -270,9 +301,29 @@ sudo -u gfvfw -H bash -c '
   .venv/bin/pip install --upgrade pip
   .venv/bin/pip install -r requirements.txt
 '
+```
 
+> ⚠️ **RHEL 系（阿里云 ECS / Alinux / CentOS / Rocky）要把 `python3` 换成
+> `python3.11`** —— 系统默认的 `python3` 是 3.6.x，项目要求 3.10+：
+> ```bash
+> sudo -u gfvfw -H bash -c '
+>   cd /srv/gfvfw
+>   python3.11 -m venv .venv
+>   .venv/bin/pip install --upgrade pip
+>   .venv/bin/pip install -r requirements.txt
+> '
+> ```
+> `gfvfw.service` 里写的是 `.venv/bin/python`（**指向虚拟环境内部**），
+> 所以换了 3.11 也**不需要**改单元文件。
+
+编译 `psycopg2` 需要 **`gcc` + Python 头文件 + libpq 头文件**（见第 1 步）。
+这一步会刷一堆编译日志，属正常；最后出现
+`Successfully installed ... psycopg2-2.x.x ...` 就对了。
+
+```bash
 # 验证
-/srv/gfvfw/.venv/bin/python -c "import fastapi, sqlalchemy, uvicorn; print('ok')"
+/srv/gfvfw/.venv/bin/python -V                                            # 期望 3.11.x
+/srv/gfvfw/.venv/bin/python -c "import fastapi, sqlalchemy, uvicorn, psycopg2; print('ok')"
 ```
 
 > `requirements.txt` 里刻意用**裸 uvicorn**，不用 `uvicorn[standard]`
