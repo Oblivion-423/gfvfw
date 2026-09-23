@@ -694,9 +694,47 @@ curl -sS -o /dev/null -w '%{http_code} %{redirect_url}\n' http://gfvfw.top/
 curl -sS -o /dev/null -w '%{http_code}\n' https://gfvfw.top/login     # 期望 200
 ```
 
-⚠️ **`Caddyfile` 里那行 `header_up X-Forwarded-For {http.request.remote.host}`
-不能删。** Caddy 默认把客户端传来的该头**追加**在后面，而应用取第一段 ——
-不覆盖的话，审计记录里的 IP 是客户端自己填的，可伪造。
+### ⚠️ 关于 X-Forwarded-For（已实测，但机制留了一个未定项）
+
+`Caddyfile` 里那行 `header_up X-Forwarded-For {http.request.remote.host}`
+**务必保留**。它把该头**覆盖**为真实对端地址。
+
+**实测结论（2026-09 在真机 https://gfvfw.top 上跑过）**：
+连发三个请求 —— 一个不带该头、两个分别带伪造的
+`X-Forwarded-For: 1.2.3.4` 与 `1.2.3.4, 5.6.7.8` ——
+**三次在上游看到的都是真实客户端 IP，伪造值一次都没有出现（连第二段都没有）**。
+所以**审计里的 IP 不可伪造**，这一点是确证的。
+
+**未定项**：到底是"我们那行覆盖生效了"，还是"这个版本的 Caddy 本来
+就不会把不可信来源的同名头带过来"，两者都能解释上面的观察，**当时没有判定**。
+这属于"机制未定、结论已定"——对安全没有影响，因为无论哪种原因，
+结果都是伪造值进不来，而那行 `header_up` 把结果锁死了。
+
+想彻底判定的话（在服务器上，只在维护窗口做）：
+
+```bash
+# 1) 起一个只回显头部的临时上游（只监听回环）
+python3 -c 'import http.server as h
+class H(h.BaseHTTPRequestHandler):
+    def do_GET(s):
+        s.send_response(200); s.end_headers()
+        s.wfile.write(("XFF=%r REAL=%r\n" % (s.headers.get("X-Forwarded-For"),
+                                             s.headers.get("X-Real-IP"))).encode())
+    def log_message(s, *a): pass
+h.HTTPServer(("127.0.0.1", 8099), H).serve_forever()' &
+
+# 2) 临时把 Caddyfile 的 reverse_proxy 指向 127.0.0.1:8099，
+#    先带 header_up 跑一次，再把它注释掉跑一次
+curl -sS -H 'X-Forwarded-For: 1.2.3.4' https://gfvfw.top/
+
+# 3) 两次结果一致 ⟹ Caddy 自己就把不可信来源的同名头丢了（那行属于双保险）；
+#    只在带 header_up 时才看不到 1.2.3.4 ⟹ 那行是**承重**的，绝不可删。
+# 4) 恢复 Caddyfile 与上游端口，systemctl reload caddy，再删掉临时上游进程。
+```
+
+> 🔴 **无论判定结果如何，第 3 步之后都不要删那行 `header_up`。**
+> 它把一个"取决于 Caddy 版本行为"的隐式保证变成了显式保证；
+> 换 Caddy 版本、加一层 CDN 或换反代时，少了它就可能重新变成可伪造。
 
 ---
 
@@ -789,7 +827,7 @@ curl -sSI https://gfvfw.top/login | grep -i '^set-cookie'    # 必须含 Secure
 | 7 | 上传一个 `.cam` | 成功；失败时错误信息指出缺哪个配置 |
 | 8 | `journalctl -u gfvfw -n 50` | 无异常堆栈 |
 | 9 | `systemctl list-timers gfvfw-backup.timer` | 显示下次触发时间 |
-| 10 | 审计页的 IP 不是 `127.0.0.1` | 说明 XFF 覆盖生效 |
+| 10 | 审计页的 IP 不是 `127.0.0.1` | 说明反代转发的客户端 IP 生效（XFF 覆盖，见第 8 步） |
 | 11 | 跑一次自动实况核查（见下） | 全 PASS（**108 项**） |
 | 12 | **没有预置账号**：`gfvfw.cli list-members` 只列出你自己建的那个管理员 | 全新库上不存在任何"默认口令"账号 |
 | 13 | 匿名（未登录）访问 `/members` | 跳到登录页（**不能**看到名册） |
@@ -1005,7 +1043,7 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 上传时报**磁盘写满** | 临时文件 + 入库副本 ≈ 2 倍文件大小 | 见第 0 节结论 2 |
 | 页面能开但**登录状态丢失** | 会话 Cookie 的 `Secure` 与访问协议不一致 | `GFVFW_HTTPS_ONLY=true` 时必须全程 https |
 | 审计里 IP 全是 `127.0.0.1` | 没开 `--proxy-headers` | 检查 `ExecStart` 是否有 `--proxy-headers` |
-| 审计里 IP 明显不对/可伪造 | Caddyfile 少了 `header_up X-Forwarded-For` | 见第 8 步 |
+| 审计里 IP 明显不对/可伪造 | `Caddyfile` 少了 `header_up X-Forwarded-For` | 见第 8 步「关于 X-Forwarded-For」 |
 | 启动报 `no such column` | 数据库结构落后于模型 | 确认 `schema_sync` 跑过（看启动日志有 `ALTER TABLE`），否则见第 11 步 |
 | 启动报 `Permission denied` 写目录 | `ProtectSystem=strict` 但路径不在 `ReadWritePaths` | 改 `gfvfw.service` 的 `ReadWritePaths` |
 | 上传后解析失败、提示缺 `GFVFW_BMS_INSTALL_PATH` | 战役数据没配 | 见第 5 步 |
