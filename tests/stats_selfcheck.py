@@ -345,6 +345,22 @@ def test_stats_and_query() -> None:
                 check("航程用海里（含 NM）", "NM" in r.text)
                 check("机型分布含待归一化标记", "待归一化" in r.text)
 
+                # 概览页（/）也必须同时给出两个时长口径。
+                # 只给一个会误导：只见「任务总时长」会低估联队飞行量，
+                # 只见「飞行员累计」会让单个任务看起来比实际长 N 倍。
+                r = client.get("/")
+                check("概览页可访问", r.status_code == 200, "得到 %d" % r.status_code)
+                check("概览页显示「任务总时长」", "任务总时长" in r.text)
+                check("概览页显示「飞行员累计时长」", "飞行员累计时长" in r.text)
+                check("概览页说明「只算一次」", "只算一次" in r.text)
+                check("概览页显示总航程", "总航程" in r.text)
+                # 概览页不得再声称「ACMI 入口已移除」—— 工作台已内嵌到三个宿主页。
+                check("概览页文案未过期（不再说入口已移除）",
+                      "已临时从导航移除" not in r.text,
+                      "概览页仍在声称 ACMI 入口被移除")
+                check("概览页指向内嵌工作台的宿主页",
+                      "/log/campaign" in r.text and "/log/training" in r.text)
+
                 r = client.get("/log")
                 check("日志页可访问", r.status_code == 200)
                 check("日志页显示合计", "合计" in r.text)

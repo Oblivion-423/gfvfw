@@ -20,14 +20,17 @@
 | **导航重构（一级菜单 + 飞行记录子菜单）** | ✅ **完成**，64 个断言通过 |
 | **战役管理（BMS `.cam` 存档解析 + 战场态势）** | ✅ **完成**，145 个断言通过 |
 | **ACMI 工作台内嵌进飞行记录 / 战役管理** | ✅ **完成**，含自动归入战役 |
+| **上线后人工修正（任务/架次可编辑删除、补录、删 ACMI、删存档）** | ✅ **完成**，67 个断言通过 |
 | 资料查询 | ⬜ **待实现**（表已建，`/library` 有占位说明） |
-| **部署产物（systemd / Caddy / 备份）** | ✅ **完成** → `deploy/DEPLOY.md` |
+| **部署产物（systemd / Caddy / 备份 / 一键升级）** | ✅ **完成** → `deploy/DEPLOY.md` |
+| **纳入 git 版本管理** | ✅ **完成**（首个提交 `5b13440`，124 文件，LF 已强制） |
 | 实际部署到 VPS | ⬜ 待你在服务器上执行 |
 | Alembic 迁移 | ⬜ 未接（现靠 `schema_sync` 自动补列） |
 
-**测试合计 622 个断言，0 失败**（`.venv\Scripts\python.exe -m pytest -q` → 8 passed）
-（战役管理带真实素材对拍时为 141 断言 —— 设置 `GFVFW_TEST_CAM` 与
-`GFVFW_TEST_STATE_JSON` 指向配套的存档与 CamReader 输出即可）
+**测试合计 708 个断言，0 失败**（`.venv\Scripts\python.exe -m pytest -q` → 9 passed）
+> 里面 **1 组会跳过**：战役管理的「与 `campaign_state.json` 对拍」需要真实存档，
+> 设 `GFVFW_TEST_CAM` 与 `GFVFW_TEST_STATE_JSON` 指向配套的 `.cam` 与 CamReader 输出即可跑满。
+> 上表 9 个套件相加正好 708（65+36+67+103+87+61+65+67+157），与 `pytest` 一致。
 
 ---
 
@@ -147,6 +150,43 @@
 > ⚠️ 单位换算**只在 `web/templating.py` 定义一处**（常量从 `services/stats.py` 导入）。
 > 模板层不得出现硬编码的 `1852` 或 `1000` —— 有测试检查。
 
+### 上线后的人工修正（录错了怎么改）
+
+**前提：数据录错不该去动数据库。** 界面上已经能改全部关键字段，且每次修改都进审计日志。
+
+| 要改什么 | 入口 | 权限点 |
+|---|---|---|
+| 任务名称 / 类型 / 可见性 / 时间窗 / 简报 | 任务详情 →「编辑任务」`/missions/{id}/edit` | `log.edit.any` |
+| 删任务（= **撤销归并**，ACMI 拆回待归并） | 任务详情 →「删除任务」`/missions/{id}/delete` | `log.delete` |
+| 架次时长 / 航程 / 机型 / 归属人 / 起降时间 | 任务详情 → 架次行「编辑」`/sorties/{id}/edit` | 自己的 `log.edit.own`；他人的 `log.edit.any` |
+| 删单个架次 | 架次编辑页底部 `/sorties/{id}/delete` | `log.delete` |
+| 补录架次（ACMI 丢了/没录） | 任务详情 →「补录架次」`/missions/{id}/sorties/new` | `log.approve` |
+| 删传错的 ACMI（未归并） | ACMI 工作台 → 上传段位 →「删除」 | `acmi.upload`（他人的需 `acmi.upload.any`） |
+| 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
+
+三条**有意设计**的约束（都有测试守着，不是遗漏）：
+
+1. **已归并的 ACMI 不能直接删**，返回 400 并提示「已归并到任务…先到任务详情页删除任务」。
+   否则等于绕过软删除把飞行日志挖掉一块。删任务会把文件**拆回待归并**，
+   于是「删错了的归并」「改归属重做」都走同一条路径。
+2. **任务的「任务时长」不随编辑时间窗变化** —— 它由各架次在空区间的并集算出
+   （多人同飞只算一次）。时间窗是元数据，用于展示与筛选。编辑页上已明说。
+3. **软删除而非物理删除**（需求 R11）：成员 / 战役 / 任务 / 架次删掉后
+   `deleted_at` 置位、行仍存在，历史日志不出现空洞；只有 `acmi_files` 是硬删除
+   （它没有 `deleted_at`），这样**同一个文件才能重新上传**。
+
+人工改过的数据会**留痕、不会被当成解析结果**：
+
+* `sorties.data_confidence` 降为 `estimated`，页面上标「手动/估算」；
+* `sorties.data_source = 'manual'`（补录的架次）；
+* `sorties.edited_by` / `edit_note` 记录改的人和原因（`edited_by` 指向 `users.id`，
+  因为改的人可能已不是成员）；
+* `services/audit.py` 记「谁 / 何时 / 改前 / 改后」。
+
+> ⚠️ 时长与航程在**表单里是小时+分、海里**，入库是秒、米 ——
+> 换算只在 `web/forms.py` 一处（`parse_local_datetime` / `_secs_from_hhmm`）。
+> `web/forms.py` 也是 UTC+8 ⇄ UTC 的唯一转换点。
+
 ### 已完成端到端验证（真实数据）
 
 用一份真实 ACMI（482 KB）走通完整链路，结果正确：
@@ -200,14 +240,28 @@ Internet ──HTTPS(443)──▶ [Caddy] ──127.0.0.1:8000──▶ [GFVFW 
                                                       └─ bms-data/（剧场数据 47.9 MB）
 ```
 
-`deploy/` 里的四个产物：
+`deploy/` 里的五个产物：
 
 | 文件 | 作用 |
 |---|---|
 | `Caddyfile` | 反向代理。**关键一行**：`header_up X-Forwarded-For {http.request.remote.host}` —— 覆盖而非追加，否则审计里的 IP 可被客户端伪造 |
-| `gfvfw.service` | systemd 单元。只监听回环、`--proxy-headers`、**不加 `--workers`**、`ProtectSystem=strict` |
+| `gfvfw.service` | systemd 单元。只监听回环、`--proxy-headers`、**不加 `--workers`**、`ProtectSystem=strict`（代码目录对服务只读） |
 | `env.example` | 生产环境变量模板（`GFVFW_SECRET_KEY` / `GFVFW_HTTPS_ONLY` / `GFVFW_BMS_INSTALL_PATH` …） |
-| `backup.py` | 备份：`VACUUM INTO` 一致性快照 + 上传目录打包 + 保留策略 |
+| `backup.py` | 备份：`VACUUM INTO` 一致性快照 + 上传目录打包 + 保留策略；`--verify` 会做 `integrity_check` |
+| `update.sh` | **一键升级**：备份 → `git pull --ff-only` → 装依赖 → 重启 → 健康检查；健康检查失败**自动回滚代码** |
+
+日常升级就一条命令（`--dry-run` 可先看不做）：
+
+```bash
+sudo /srv/gfvfw/deploy/update.sh
+```
+
+> ⚠️ 因为 `ProtectSystem=strict` + `ReadWritePaths=/srv/gfvfw/var`，
+> **不能在服务器上直接编辑代码** —— 必须「本地改 → push → 服务器跑 update.sh」。
+> 这是故意的加固：服务器上的手改会在下次 `git pull` 时冲突或丢失。
+>
+> ⚠️ 自动回滚只回滚**代码**。若新版本已改过数据库结构（`schema_sync` 只加列、不撤销），
+> 要回到旧结构就得从备份恢复 —— 所以 `update.sh` 第 1 步的备份不能跳。
 
 三个**必须在生产环境打开**的开关，否则会踩坑：
 
@@ -291,11 +345,14 @@ gfvfw/
     app.py             应用装配（中间件顺序、异常处理、路由挂载）
     deps.py            Principal 身份对象 + require() 权限守卫（依赖工厂！）
     templating.py      Jinja2 环境与过滤器（UTC→UTC+8、单位换算、fromjson）
-    routers/           home / auth / members / acmi / missions / campaigns
-                       / theater（战役管理）/ stats（含飞行记录三子页）
-                       / placeholders（仅资料查询）
+    routers/           home / auth / members / acmi / missions / sorties
+                       / campaigns / theater（战役管理）
+                       / stats（含飞行记录三子页）/ placeholders（仅资料查询）
+    forms.py           表单解析与单位换算统一入口（UTC+8⇄UTC、时长、海里）
     templates/         base + home + login
-                       + members/* + missions/* + campaigns/*
+                       + members/* + missions/*（含 form/delete）
+                       + sorties/form.html（架次编辑 + 补录）
+                       + campaigns/*
                        + acmi/_wizard.html（内嵌区块，被三个宿主页面 include）
                        + log/*（campaign / training / pilots）+ stats/*
                        + theater/*（index/upload/detail/map/air/ground/
@@ -320,6 +377,9 @@ scripts/              开发期工具（不参与线上流程）
                         与完整安装逐字段对比 9 份真实存档
   cam_units_probe.py    .uni 单位流与参考输出对拍
   cam_state_probe.py    完整战役态势与 campaign_state.json 全量对拍
+  live_edit_check.py    对**运行中的服务**做只读实况核查：登录→逐页检查关键文案
+                        与按钮→构造应被拒绝的请求（CSRF 缺失 403、不存在 id 404、
+                        已归并 ACMI 400）。48 项，不改动任何数据
 
 tests/
   acmi_parser_selfcheck.py   解析器自校验（65 断言，含"标记不从 0 开始"的
@@ -329,13 +389,17 @@ tests/
   web_selfcheck.py           骨架/认证/权限/名册 + schema 漂移自愈
                            + 部署安全（Secure Cookie / XFF 信任）（67 断言）
   acmi_web_selfcheck.py      ACMI 工作台：入口/权限/上传/认领/归并/自动归入战役
-                             + 开放重定向防护 + 任务时长只算一次（103 断言）
-  stats_selfcheck.py         单位换算/时长并集/统计口径/多条件查询（80 断言）
+                             + 开放重定向防护 + 任务时长只算一次
+                             + 删除未归并文件（103 断言）
+  stats_selfcheck.py         单位换算/时长并集/统计口径/多条件查询
+                             + 概览页两个时长口径必须同时出现（87 断言）
   campaign_selfcheck.py      战役 CRUD/任务归入移出/软删除不丢数据（61 断言）
   nav_selfcheck.py           导航结构/工作台只出现在三个宿主页/占位页（65 断言）
+  edit_selfcheck.py          人工修正：任务编辑/删除（撤销归并）、架次编辑/删除、
+                             补录、权限边界、审计留痕、软删除不丢数据（67 断言）
   campaign_theater_selfcheck.py  战役管理：坐标/LZSS/容器/权限/数据表/真实解析
                              /上报管线/易手检测/页面/底图与比例尺
-                             /无 BMS 部署契约（145 断言）
+                             /无 BMS 部署契约/删除存档回退（157 断言）
   test_selfchecks.py         pytest 包装
 
 docs/
@@ -396,6 +460,13 @@ deploy/                上线产物（VPS 部署用，不参与本地开发）
 | 成员「队号」 | **从界面移除**，数据库列保留（只读历史列） | 联队不用它；它此前只在新建/编辑表单出现，详情页与列表页从不显示 —— 是个"只能写、看不见"的字段。⚠️ 接口同步去掉该字段，否则表单没了字段、后端还写 `= service_number.strip() or None`，每次编辑都会把已有队号**静默清空** |
 | 成员表单的占位提示 | 去掉示例型 `placeholder="如 Oblivion"` 等 | 联队要求输入框不预置示例文案；ACMI 认领口径改由字段下方的 `hint` 说明 |
 | 名册搜索 | 只按**呼号**匹配，去掉按队号匹配 | 队号已从界面移除；按一个页面上看不见的字段做匹配，只会让搜索结果显得莫名其妙 |
+| 录错数据怎么办 | **界面上可改可删**（任务/架次编辑删除、补录、删 ACMI、删存档），不动数据库 | 上线后必然要改数据；没有界面就会有人直接改库，绕过审计与软删除。见「上线后的人工修正」 |
+| 已归并的 ACMI 能否删除 | **不能**，返回 400 并提示先删任务 | 直接删等于绕过软删除把飞行日志挖掉一块。删任务会把文件**拆回待归并**，于是"改归属""重做归并"共用同一条路径 |
+| 人工改过的架次要不要标记 | **要**：`data_confidence='estimated'` + 页面「手动」徽标 + `edited_by`/`edit_note` | 否则人工估算值与 ACMI 解析结果在页面上无法区分，统计失去可信度 |
+| 任务时间窗编辑是否改变「任务时长」 | **不改变** | 任务时长由各架次在空区间的并集算出（多人同飞只算一次）。时间窗是元数据。编辑页上已明说，否则用户会以为改了时间就改了时长 |
+| 编辑/删除的权限 | 只查权限点，**从不查角色名**：`log.edit.own/any`、`log.delete`、`log.approve`、`acmi.upload.any`、`campaign.manage` | 指挥有 `log.delete`，**教官没有**（教官可改可批但不可删）—— 这类差异只有权限点能表达 |
+| 代码怎么上线 | **一条命令** `sudo deploy/update.sh`（备份→pull→依赖→重启→健康检查→失败自动回滚代码） | 手动几步必然有人漏掉备份或漏掉重启。见 DEPLOY.md 第 11 节 |
+| 换行符 | `.gitattributes` 强制 **`eol=lf`** | CRLF 传到 Linux 会让 `update.sh` 报 `bad interpreter: ...bash^M`，`Caddyfile`/`gfvfw.service` 指令也会解析失败 —— 在 Windows 上完全看不出来 |
 
 ---
 
@@ -422,9 +493,19 @@ T= 分量       [0]经度 [1]纬度 [2]海拔(m) [3]roll [4]pitch [5]yaw [6]东(
 # 单独跑（报错时输出更直观）
 .\.venv\Scripts\python.exe tests\acmi_parser_selfcheck.py
 .\.venv\Scripts\python.exe tests\ingest_selfcheck.py
+.\.venv\Scripts\python.exe tests\edit_selfcheck.py
 
 # 探查某个 ACMI 的结构
 .\.venv\Scripts\python.exe scripts\acmi_probe.py "路径\xxx.zip.acmi"
+```
+
+服务器上（部署后）：
+
+```bash
+sudo /srv/gfvfw/deploy/update.sh --dry-run        # 先看升级会做什么
+sudo /srv/gfvfw/deploy/update.sh                  # 真升级（含自动回滚）
+journalctl -u gfvfw -n 50 --no-pager              # 看服务日志
+sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy   # 改反代后先验再载
 ```
 
 ---
@@ -432,15 +513,23 @@ T= 分量       [0]经度 [1]纬度 [2]海拔(m) [3]roll [4]pitch [5]yaw [6]东(
 ## 数据安全
 
 - 数据库与上传目录均在 `var/`，**备份时必须一起打包**
-- `var/` 已加入 `.gitignore`，**绝不提交到仓库**
+- `var/` 已加入 `.gitignore`，**绝不提交到仓库**（所以 `git pull` 碰不到真实数据）
 - 生产环境必须通过环境变量设置 `GFVFW_SECRET_KEY`
+- 删除成员/战役/任务/架次都是**软删除**（置 `deleted_at`），行仍在库里 —— 历史日志不出现空洞；
+  只有 `acmi_files` 是硬删除（它没有 `deleted_at`），这样同一个文件才能重新上传
 
 ---
 
-## 尚未开始的部分
+## 尚未开始的部分（二期）
 
-1. **Web 界面**（FastAPI + 服务端渲染，一期不做前后端分离）
-2. **归并确认页**（本项目最关键的人机交互，需要仔细设计）
-3. **查询与统计页面**
-4. **部署**：VPS + Caddy 自动 HTTPS，应用不直接暴露端口
-5. **定时备份**：数据库 + 上传目录一起打包，并定期下载到本地
+一期这五项**都已完成**（Web 界面 / 归并确认 / 查询统计 / 部署产物 / 定时备份），
+下面是真的还没做的：
+
+1. **Alembic 迁移** —— 当前靠 `services/schema_sync.py` 启动时补列，只加不改、无法回滚
+2. **资料查询 `/library`** —— 表已建，页面是占位说明
+3. **入队流水线 UI** —— 招飞申请 → 审批 → 转正的界面流程
+4. **IP 维度限流**（需求 R7）—— 现在只有账号维度的登录锁定（15 分钟）
+5. **后台任务队列** —— 大文件解析会阻塞其他请求（实测 247 MB 需 46 秒）
+6. **PostgreSQL 迁移** —— 可移植性已强制（`check_portability()` 会拒绝 SQLite 专有写法），但未实际迁
+
+部署相关：`deploy/DEPLOY.md` 第 14 节有同样的清单。

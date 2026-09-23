@@ -77,7 +77,33 @@ python3 --version                # 需要 3.10+
 
 ## 2. 把代码传到服务器
 
-⚠️ **必须排除**本机的东西，否则会把 Windows 虚拟环境、本地测试数据、
+项目**已纳入 git**（首个提交 `5b13440`，124 个文件）。所以直接用 `git clone`：
+
+```bash
+# 服务器上
+sudo mkdir -p /srv/gfvfw && sudo chown gfvfw:gfvfw /srv/gfvfw
+sudo -u gfvfw git clone <你的仓库地址> /srv/gfvfw
+sudo chown -R gfvfw:gfvfw /srv/gfvfw
+ls /srv/gfvfw         # 应看到 gfvfw/ deploy/ tests/ requirements.txt README.md docs/
+```
+
+✅ **`var/`（数据库 + 上传文件 + 备份）已被 `.gitignore` 排除**，
+所以 `git clone` / `git pull` **永远不会碰到服务器上的真实数据**。
+`.venv/`、`.env`、`reference/`、`*.zip`、`__pycache__/` 同样已排除。
+
+> `.gitattributes` 里已强制 `eol=lf`。这一点**很重要**：如果 `deploy/update.sh`
+> 带着 CRLF 换行到 Linux，会直接报 `bad interpreter: /usr/bin/env bash^M`；
+> `Caddyfile`、`gfvfw.service` 的指令也会因 `\r` 解析失败。Windows 上完全看不出来。
+
+想核对服务器上拿到的是 LF：
+
+```bash
+git ls-files --eol | grep -v 'w/lf'   # 不应有输出
+```
+
+### 没有 git 仓库时的替代（rsync）
+
+⚠️ 必须排除本机的东西，否则会把 Windows 虚拟环境、本地测试数据、
 第三方参考源码一起推上去：
 
 ```bash
@@ -100,14 +126,7 @@ rsync -av --delete \
 | `reference/`、`*.zip` | CamReader / SITREP 的第三方源码，服务器不需要 |
 | `.env` | 本机配置，服务器用 `/etc/gfvfw/env` |
 
-> 建议之后把项目纳入 git（当前不是 git 仓库），改用 `git clone` + `git pull` 升级，
-> 比 rsync 更容易审计改了什么。见第 11 步。
-
-```bash
-# 服务器上
-sudo chown -R gfvfw:gfvfw /srv/gfvfw
-ls /srv/gfvfw         # 应看到 gfvfw/ deploy/ tests/ requirements.txt README.md docs/
-```
+⚠️ 用 rsync 时 `--delete` 会删掉服务器上多余的目录 —— 一定要确认 `var/` 在排除列表里。
 
 ---
 
@@ -352,42 +371,122 @@ curl -sSI https://你的域名/login | grep -i '^set-cookie'    # 必须含 Secu
 | 8 | `journalctl -u gfvfw -n 50` | 无异常堆栈 |
 | 9 | `systemctl list-timers gfvfw-backup.timer` | 显示下次触发时间 |
 | 10 | 审计页的 IP 不是 `127.0.0.1` | 说明 XFF 覆盖生效 |
+| 11 | 跑一次自动实况核查（见下） | 全 PASS |
+
+### 一条命令做完全部页面核查（推荐）
+
+仓库自带一个**只读**探针，它会登录、逐页检查关键文案与按钮是否真的渲染出来，
+并**构造应被拒绝的请求**来确认服务端边界（不是只隐藏按钮）：
+
+```bash
+sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; \
+  set -a; . /etc/gfvfw/env; set +a; \
+  GFVFW_LIVE_USER=admin GFVFW_LIVE_PASSWORD="你的管理员密码" \
+  .venv/bin/python scripts/live_edit_check.py http://127.0.0.1:8000'
+```
+
+若走反代，把地址换成 `https://你的域名` 更贴近真实（会顺带验证 Cookie/跳转）。
+
+**它不会改动任何数据**，只做 GET 与"注定被拒"的 POST。
+期望输出末尾：
+
+```
+实况核查：48 项，通过 48，失败 0
+```
+
+> ⚠️ 账号密码**从环境变量读**（`GFVFW_LIVE_USER` / `GFVFW_LIVE_PASSWORD`），
+> 脚本里只留了一个本机开发用的默认值 —— **不要**把生产密码写进脚本，
+> 那等于把它提交到 git 历史里。
+> 输出里的 `SKIP` 不是失败 —— 例如"库里没有待归并的 ACMI"时，
+> 那项边界无法在真实数据上验证，属于正常跳过。
 
 ---
 
 ## 11. 升级流程
 
+**已纳入 git（2026 起）**，所以升级是一条命令：
+
 ```bash
-# 1) 先备份（升级前必做）
-sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
-  .venv/bin/python deploy/backup.py --verify'
-
-# 2) 传新代码（第 2 步的 rsync；它不会碰 var/）
-# 3) 更新依赖
-sudo -u gfvfw -H /srv/gfvfw/.venv/bin/pip install -r /srv/gfvfw/requirements.txt
-
-# 4) 重启
-sudo systemctl restart gfvfw
-journalctl -u gfvfw -n 30 --no-pager
+sudo /srv/gfvfw/deploy/update.sh
 ```
 
-⚠️ **数据库结构变更目前的处理方式**：应用启动时会调
-`services/schema_sync.py` **自动补上缺失的列**（`create_all` 不会加列，
-这是曾经踩过的坑：生产环境报 `no such column`）。
+它按顺序做六步，**任何一步失败就停下**：
+
+| 步骤 | 做什么 | 失败时 |
+|---|---|---|
+| 1 | 备份（`backup.py --verify`，含 `integrity_check`） | **中止**，不动代码 —— 没有退路就不改 |
+| 2 | `git pull --ff-only` | 中止（有本地改动会拒绝） |
+| 3 | `pip install -r requirements.txt` | 中止 |
+| 4 | `systemctl restart gfvfw` | — |
+| 5 | 健康检查 `GET /login` 期望 200（最多等 20 秒） | **自动 `git reset --hard` 回滚代码并重启** |
+| 6 | 报告新提交、备份位置、建议的自检命令 | — |
+
+先看它会做什么（不改任何东西）：
+
+```bash
+sudo /srv/gfvfw/deploy/update.sh --dry-run
+```
+
+> ⚠️ **代码目录对服务是只读的**（`gfvfw.service` 里 `ProtectSystem=strict`，
+> 只放开 `var/`）。这是故意的加固 —— 所以**不能**在服务器上直接编辑代码，
+> 必须「本地改 → push → 服务器跑 update.sh」。
+>
+> ⚠️ 回滚只回滚**代码**。如果新版本已经改过数据库结构（`schema_sync` 只加列、
+> 不会撤销），要回到旧结构就得按第 9 步从备份恢复。**所以第 1 步的备份不能跳。**
+
+没有 git 时的替代（`GFVFW_RSYNC_FROM`）：
+
+```bash
+sudo GFVFW_RSYNC_FROM=user@你的开发机:/srv/gfvfw/ /srv/gfvfw/deploy/update.sh
+```
+
+⚠️ 这条路**无法自动回滚代码**（没有版本可退），失败时只能人工处理。
+
+### 数据库结构变更的现状
+
+应用启动时会调 `services/schema_sync.py` **自动补上缺失的列**
+（`create_all` 不会加列 —— 这是曾经踩过的坑：生产环境报 `no such column`）。
 
 这是**开发期权宜方案**：
-- 它只**加列**，不会改类型、不会删列、不会重建索引；
-- 没有版本记录，无法回滚；
+
+- 只**加列**，不会改类型、不会删列、不会重建索引；
+- 没有版本记录，**无法回滚**；
 - 多进程并发启动时理论上有竞争（本项目固定单进程，故风险低）。
 
 **正式上线前建议改接 Alembic**（`requirements.txt` 里已经装了）。
-在那之前：**每次升级前务必先备份**，且升级后立刻核对关键页面。
-
-回滚：把备份按第 9 步恢复即可（代码用 rsync 传回旧版本）。
+在那之前：**每次升级前务必先备份**，升级后立刻核对关键页面。
 
 ---
 
-## 12. 排错速查
+## 12. 上线后的人工修正（出错时怎么改）
+
+数据录错了不必去动数据库 —— 界面上已经能改：
+
+| 要改什么 | 去哪 | 需要的权限 |
+|---|---|---|
+| 任务名称/类型/可见性/时间/简报 | 任务详情 →「编辑任务」 | `log.edit.any`（教官/指挥） |
+| 删任务（= **撤销这次归并**） | 任务详情 →「删除任务」 | `log.delete`（仅指挥/owner） |
+| 架次时长/航程/机型/归属人 | 任务详情 → 架次行「编辑」 | 自己的：`log.edit.own`；他人的：`log.edit.any` |
+| 删架次 | 架次编辑页底部 | `log.delete` |
+| 补录一条架次（文件丢了） | 任务详情 →「补录架次」 | `log.approve`（教官/指挥） |
+| 删传错的 ACMI（未归并的） | ACMI 工作台 → 上传阶段 →「删除」 | `acmi.upload`（自己的） |
+| 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
+
+两个**有意设计**的约束：
+
+1. **已归并的 ACMI 不能直接删。** 那等于绕过软删除把飞行日志挖掉一块。
+   正确做法是「删除任务」—— 它会把文件**拆回待归并**，然后你就能删或重新归并了。
+   这同时也是「改归属/重做归并」的路径。
+2. **任务的「任务时长」不随编辑时间窗变化。** 它由各架次的在空区间算出
+   （多人同飞只算一次）。时间窗是元数据，用于展示与筛选。编辑页上已明说。
+
+所有手动修改都会写进**审计日志**（谁、何时、改前改后、原因），
+架次被人工改过之后可信度会自动降为「估算」，页面上标「手动/估算」，
+不会与 ACMI 原始解析结果混淆。
+
+---
+
+## 13. 排错速查
 
 | 症状 | 原因 | 处理 |
 |---|---|---|
@@ -402,13 +501,16 @@ journalctl -u gfvfw -n 30 --no-pager
 | 启动报 `Permission denied` 写目录 | `ProtectSystem=strict` 但路径不在 `ReadWritePaths` | 改 `gfvfw.service` 的 `ReadWritePaths` |
 | 上传后解析失败、提示缺 `GFVFW_BMS_INSTALL_PATH` | 战役数据没配 | 见第 5 步 |
 | 多人同时传文件时变慢 | 应用单进程**串行**解析 | 当前设计如此；需要并发就要引入任务队列（未做） |
+| `update.sh` 报 `bad interpreter` | 代码带 CRLF 换行传到 Linux | 仓库已用 `.gitattributes` 强制 LF；若用 rsync 传则需 `unix2dos` 反向处理，见第 2 步 |
+| `git pull` 被拒绝（`local changes`） | 有人在服务器上直接改了代码 | **不该这样**（目录对服务只读）；`git -C /srv/gfvfw status` 看改了什么，用 `git checkout -- .` 丢弃后重跑 |
+| 改了 `gfvfw.service` / `Caddyfile` 不生效 | 它们**不在** `ReadWritePaths` 里，是系统文件 | 改 `/etc/systemd/system/gfvfw.service` 与 `/etc/caddy/Caddyfile`，然后 `systemctl daemon-reload` / `systemctl reload caddy` |
 
 ⚠️ **不要给服务加 `--workers N`**：SQLite 是单写者，多进程会写冲突。
 本项目所有缓存（剧场数据、解析状态）也都是按单进程设计的。
 
 ---
 
-## 13. 尚未完成（二期）
+## 14. 尚未完成（二期）
 
 | 项 | 状态 |
 |---|---|

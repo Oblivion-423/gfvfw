@@ -35,11 +35,35 @@
   </div>
 </div>
 
+<div class="panel">
+  <h2 style="margin-top:0">飞行总量</h2>
+  <div class="stat-row">
+    <div class="stat">
+      <span class="v">{{ stats.flight_seconds | dur }}</span>
+      <span class="k">任务总时长</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ stats.pilot_flight_seconds | dur }}</span>
+      <span class="k">飞行员累计时长</span>
+    </div>
+    <div class="stat">
+      <span class="v">{{ stats.distance_meters | nm }}</span>
+      <span class="k">总航程</span>
+    </div>
+  </div>
+  <p class="small muted" style="margin:10px 0 0">
+    <strong>两个时长口径不同，不是数据错误：</strong>
+    「任务总时长」按任务计 —— <strong>多人飞同一任务只算一次</strong>；
+    「飞行员累计时长」按人计 —— 是各人参战时长之和，因此 ≥ 前者。
+    细分见 <a href="/stats">统计</a>。
+  </p>
+</div>
+
 {% if stats.sorties == 0 and stats.acmi_files == 0 %}
 <div class="flash info">
   <strong>系统从零开始。</strong>
   按联队决定，<strong>不导入历史文件</strong>，飞行日志从新上传的 ACMI 开始累积。
-  <br>当前为空属正常状态 —— 数据录入入口已临时隐藏，见下方说明。
+  <br>当前为空属正常状态。
 </div>
 {% endif %}
 
@@ -72,12 +96,33 @@
 <div class="panel">
   <h2 style="margin-top:0">关于数据录入</h2>
   <p class="small" style="margin-top:-6px">
-    <strong>ACMI 导入、飞行员认领、归并确认的入口已临时从导航移除</strong>（按联队要求）。
-    这三个功能与其中的数据都仍然保留，只是界面上暂时不显示入口，
-    后续需要时可以直接恢复。
+    <strong>没有单独的 ACMI 上传页。</strong>
+    上传 / 飞行员认领 / 归并确认合并为一个可折叠的
+    <strong>「ACMI 工作台」</strong>，内嵌在下面三个业务页面里，跟着页面上下文走：
   </p>
+  <table>
+    <thead><tr><th style="width:230px">去哪里录</th><th>效果</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><a href="/log/campaign">飞行记录 · 战役记录</a></td>
+        <td>归入页面顶部筛选的那个战役</td>
+      </tr>
+      <tr>
+        <td><a href="/log/training">飞行记录 · 训练记录</a></td>
+        <td>必然记为日常训练，出现在训练记录列表里</td>
+      </tr>
+      <tr>
+        <td><a href="/theater">战役管理 · 战役详情</a></td>
+        <td>归入当前战役，并可对照战场态势</td>
+      </tr>
+    </tbody>
+  </table>
   <p class="small muted" style="margin-bottom:0">
-    因此当前"飞行记录"中显示的是已经入库的历史数据，暂时不会新增。
+    录错了不必改数据库：任务与架次都能在页面上<b>编辑 / 删除</b>，
+    也能<b>补录架次</b>、删除传错的 ACMI 与战役存档。
+    删除任务等于<b>撤销这次归并</b>（原始文件会退回待归并，可重新归并或删除）。
+    所有人工改动都会写入审计日志，并标记为「手动/估算」，不会与 ACMI 原始解析结果混淆。
+    操作清单见仓库内 <code>deploy/DEPLOY.md</code> 的「上线后的人工修正」一节。
   </p>
 </div>
 

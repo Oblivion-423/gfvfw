@@ -406,11 +406,13 @@
 | `data_recorder` | TEXT | NULL | 如 `Falcon BMS 4.38.1` |
 | `data_source` | TEXT | NULL | `Falcon 4.0` |
 | `reference_time` | TEXT | NULL | ⚠️ 剧本地图纪元，**不可当真实日期**（§5.2） |
-| **`filename_time`** | TEXT | NULL | **新增**：文件名里的原始时间，保留以备审计 |
-| **`recorded_end_at`** | TEXT | NULL | = 文件名时间（**存档时刻**，见 §7.3） |
-| **`recorded_start_at`** | TEXT | NULL | = `文件名时间 − max_relative_seconds`（任务开始） |
-| **`max_relative_seconds`** | REAL | NULL | **新增**：文件内最大 `#` 时间戳 `t_max` |
-| `duration_seconds` | REAL | NULL | = `max_relative_seconds`，即总时长 |
+| **`filename_time`** | TEXT | NULL | **新增**：文件名里的原始时间，保留以备审计与比对 |
+| **`min_relative_seconds`** | REAL | NULL | **新增**：文件内最小 `#` 时间戳 `t_min`。⚠️ 常不为 0（相对 `ReferenceTime` 纪元，实测可到 36000 秒级） |
+| **`time_origin_utc`** | TEXT | NULL | **时间基准** `t=0`：`= 文件名时间 − t_max`。这是**真正的录制起点参照** |
+| `recorded_start_at` | TEXT | NULL | = `time_origin_utc + t_min`（开始录到飞机） |
+| `recorded_end_at` | TEXT | NULL | = `time_origin_utc + t_max`（停止录制） |
+| **`max_relative_seconds`** | REAL | NULL | 文件内最大 `#` 时间戳 `t_max` |
+| `duration_seconds` | REAL | NULL | = **`t_max − t_min`**（录制时长，⚠️ **不是** `t_max`，见下） |
 | `object_count` | INTEGER | NULL | ACMI 内对象数 |
 | **`objects_with_pilot_name`** | INTEGER | NULL | 带 `Pilot=` 字段的对象数。⚠️ **≠ 人驾数** |
 | **`unnamed_ai_actors`** | INTEGER | NULL | 无 `Pilot=` 的对象数（确定是无身份 AI） |
@@ -429,6 +431,24 @@
 > ✅ **SHA256 UNIQUE 是关键防线**：多人都传同一份主机录像时，
 > 第二次上传会命中已有记录，直接提示"此文件已存在（由 XX 于 YYYY-MM-DD 上传）"，
 > 而不是产生重复数据。
+
+> ⚠️ **为什么 `duration_seconds` 是 `t_max − t_min` 而不是 `t_max`**（曾经的真实 bug）：
+>
+> ACMI 的时间戳是**相对 `ReferenceTime`（场景纪元）**的，不是相对录制开始的。
+> 因此首标记常常是很大的数 —— 实测一份文件的 `t_min = 36000.2`（10 小时），
+> 而它只录了约 1.2 小时。当初把 `t_max` 当总时长，导致
+> **51.51 小时的"飞行"** 出现在页面上（真实 1.23 小时）。
+>
+> 正确口径：`t=0 基准 = 文件名时间 − t_max`，于是
+> `duration = t_max − t_min`，`recorded_start_at = 基准 + t_min`。
+> 回归防线见 §10.7 与 `tests/acmi_parser_selfcheck.py` 的"标记不从 0 开始"用例。
+>
+> ⚠️ **`acmi_files` 没有 `deleted_at`**（本表不参与软删除，D5 的例外）：
+> 该表是**硬删除**。理由是**同一个文件必须能重新上传**，而 `sha256` 有 UNIQUE
+> 约束 —— 若只软删除，重传会撞唯一索引而永远失败。
+> 代价是：**已归并的文件不得直接删除**，否则等于绕过软删除在飞行日志上挖洞。
+> 因此接口层强制"先删任务以撤销归并"，任务删除时把
+> `mission_id` / `batch_id` 一并置空退回待归并。详见 requirements §5.4。
 
 ### 4.2 `acmi_actors` —— 文件中的对象
 
@@ -856,18 +876,21 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 **示例**（实测风格的数据）：
 ```
 文件名 2026-04-16_13-42-23   →  存档时刻 2026-04-16 13:42:23 UTC
-文件内最大时间戳 t_max = 3600 →  任务开始于 12:42:23 UTC，历时 1 小时
+文件内最大时间戳 t_max = 3600 →  时间基准 t0 = 12:42:23 UTC
+文件内最小时间戳 t_min = 12   →  录制区间 12:42:35 ~ 13:42:23，录制时长 3588 秒
 ```
 
 ### 设计影响
 
 | 项 | 变更 |
 |---|---|
-| `acmi_files.recorded_start_at` | 语义修正为 **`t0 = 文件名时间 − t_max`**（任务开始） |
-| `acmi_files.recorded_end_at` | **= 文件名时间**（存档时刻） |
+| `acmi_files.time_origin_utc` | **新增列**：时间基准 `t0 = 文件名时间 − t_max` |
+| `acmi_files.min_relative_seconds` | **新增列**：`t_min`，⚠️ 实测常不为 0 |
+| `acmi_files.recorded_start_at` | = **`t0 + t_min`**（开始录到飞机） |
+| `acmi_files.recorded_end_at` | = **`t0 + t_max`**（停止录制） |
 | `acmi_files.filename_time` | **新增列**：文件名原始时间，保留以备审计与比对 |
 | `acmi_files.max_relative_seconds` | **新增列**：`t_max`，换算依据 |
-| `acmi_files.duration_seconds` | **= `t_max`**（相对秒数即总时长，无需再减） |
+| `acmi_files.duration_seconds` | ⚠️ **= `t_max − t_min`**（曾误为 `t_max`，见下方"已更正的严重错误"） |
 | `sorties.takeoff_at` / `landing_at` | 存**绝对 UTC**（`t0 + 相对秒数`） |
 | `sortie_events.occurred_at` | 存**绝对 UTC** |
 | `sortie_events.relative_seconds` | **保留原始相对秒数**，便于对回原件 |
@@ -879,12 +902,33 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 > 若实测发现二者有明显偏差（如存档晚于最后事件若干分钟），
 > 则改为**以文件名时间为锚点存原始相对值**，绝对时间由展示层按需换算。
 
+### ⚠️ 已更正的严重错误：`duration_seconds` 曾等于 `t_max`
+
+上表最初写的 `duration_seconds = t_max`（"相对秒数即总时长，无需再减"）
+**是错的**，并已在真实数据上造成可见错误。
+
+| 项 | 内容 |
+|---|---|
+| 错误假设 | 时间戳从 0 开始，故 `t_max` 即总时长 |
+| 实际情况 | 时间戳相对 **`ReferenceTime`（场景纪元）**，首标记常常是 36000 秒级（10 小时） |
+| 后果 | 一份**真实 1.23 小时**的记录被算成 **51.51 小时**；批量抽查 9 份文件，误差最大 36000 秒 |
+| 用户发现 | 由联队成员指出"录制时长解析有误" |
+| 修正 | `duration_seconds = t_max − t_min`，并新增 `time_origin_utc` / `min_relative_seconds`，`recorded_start_at` 改用 `t0 + t_min` |
+| 数据修复 | `scripts/reparse_acmi.py --apply` 重解析历史文件（默认只预览） |
+| 测试为何没抓到 | 合成 ACMI 从 `#0.0` 开始，`min == 0`，错误**看不出差异** |
+| 新增防线 | ① 合成 ACMI 增加"标记不从 0 开始"的变体；② 摄入链路断言「任务时间窗宽度 == 录制时长」 |
+
+> 教训：**当"正确"与"错误"实现只在某些输入上才有差异时，测试必须构造那种输入。**
+> 只测"典型样本"会让整类错误长期潜伏。
+
 ### 已排除的错误做法
 
 | 做法 | 为何错误 |
 |---|---|
 | 用 `ReferenceTime` 当任务日期 | 它是**剧本地图纪元时间**（实测为 `2024-8-16`），与真实日期无关 |
 | 把文件名时间当任务开始时间 | ❌ 与实测语义相反（本轮已更正） |
+| 用 `t_max` 当录制时长 | ❌ 假设时间戳从 0 开始，实际相对场景纪元（见上） |
+| 用 `t_max` 当录制结束的绝对时间锚点 | ❌ 应为 `t0 + t_max` |
 | 把 `#` 时间戳当绝对值 | 它是相对秒数，0 点是任务开始 |
 
 ---
@@ -963,6 +1007,11 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 | v0.6 | ✅ **判定规则定稿**：`Pilot=` 存在 **∧** 飞行员名命中联队名册 → 判定为成员飞行；**禁止按机型过滤**（实测同一飞行员驾驶多国多型飞机）。<br>✅ **新增 §7.4 起降判定规则**（联队口径）：起飞 = 名字出现即计 1 次；降落 = 文件结束时速度为零。**实测分离度极大**（已降落 CAS 0~4 节 / 在空 168~358 节），并明确两种无法判定情形的处理。<br>✅ 解析器 `gfvfw/acmi_parser.py` 完成，**58 个断言全部通过**；关键校验：真实数据双路距离偏差 **0.0~0.1%**（证实 `T=` 分量解读正确）。 |
 | v0.7 | **设计已落地实现**。新增 §10 实现状态与实现期发现：<br>① 28 张表全部建成，可移植性检查 **0 问题**，外键 52、索引 48；<br>② **可移植性从"约定"升级为"机器强制"** —— SQLAlchemy 带 `postgresql` extra + `PORTABLE_TYPES` 白名单 + `check_portability()` 在测试中拦截；<br>③ 修正两处**关系歧义**（`users↔members`、`sorties↔sortie_events` 各有两条外键路径，须显式 `foreign_keys`）；<br>④ **新增 ACMI 内容校验** —— 缺 `FileType` 头部且无对象的文件必须明确报错，不得静默接受（避免"解析成功但零架次"的迷惑结果）；<br>⑤ 摄入链路 `gfvfw/services/ingest.py` 完成，**33 断言通过**；全套 **91 断言 0 失败** |
 | v0.8 | **Web 与全链路打通**，新增 §10.6 实现期发现：<br>① **新增 `ignored_pilots` 表（第 29 张）** —— 支撑"把某飞行员名判定为非联队人员"。采用**名字级**名单而非给 `acmi_actors` 加字段：同一名字会出现在成百上千条 actor 行上，逐行标记既冗余又易不一致；<br>② **`acmi_files.sortie_summaries_json`** —— 持久化解析快照。`sorties` 的指标在**确认入库时**才写入，若不存快照，确认时就得把最大 107.9 MB 的 ACMI 重新解析一遍；<br>③ ⚠️ **发现 `create_all` 不会给已存在的表加列** —— 新增字段后测试全绿，而**真实数据库直接 500**。新增 `services/schema_sync.py` 在启动时自动补齐缺失列（只 ADD COLUMN，绝不删改），并加了回归测试；<br>④ 端到端验证：真实 ACMI 走通「上传→认领→归并→任务详情」，时长/航程/起降判定均正确 |
+| v0.9 | **战役态势入库（第 30~35 张表）**：新增 `campaign_state.py` 的 6 张表（存档、队伍状态、目标点、易手、单位、事件），支撑 `.cam` 存档解析与态势图。同轮发现并修正**两类坐标系陷阱**：`CampObjData`/`squadrons` 存的是**英尺且 X=北 Y=东**（与直觉相反），`.uni` 已是**网格**；1 网格 = 1 km，原点在西南。另修正 `.uni` 解析必须依赖剧场类表 `Falcon4_CT.xml`（`entityTypeId` 自描述） |
+| v1.0 | ⚠️ **修正时间模型（严重）**：`duration_seconds` 由 `t_max` 改为 **`t_max − t_min`**，新增 `min_relative_seconds` 与 `time_origin_utc`，`recorded_start_at/end_at` 改用 `t0 + t_min` / `t0 + t_max`。起因：真机数据把 **1.23 小时**算成 **51.51 小时**。详见本文档"已更正的严重错误"与 §10.7 |
+| v1.1 | **时长两个口径**（任务维度并集 / 飞行员维度相加）：`missions.duration_seconds` 降级为"归并时刷新"的冗余列，页面改为**读取时**经 `services/stats.py::mission_flight_seconds` 计算，避免冗余列过期导致展示不一致 |
+| v1.2 | **上线与运维**：`deploy/` 产物（systemd / Caddy / 备份 / 一键升级）；`GFVFW_HTTPS_ONLY` 与会话 Cookie `Secure`；审计取 `X-Forwarded-For` 时**只信任受信代理**（否则 IP 可被客户端伪造） |
+| v1.3 | **新增 requirements §5.4 人工修正与删除口径**，本文档同步：<br>① 明确 `acmi_files` 是 **D5 软删除的例外**（硬删除，否则 `sha256` UNIQUE 会导致同文件永不可重传）；<br>② 已归并文件禁止直接删除 —— 任务删除时把 `mission_id`/`batch_id` 置空以**撤销归并**；<br>③ 人工改动留痕列（`data_confidence` / `data_source` / `edited_by` / `edit_note`）确认语义，`edited_by` 指向 **`users.id`**（改的人可能已不是成员） |
 
 ---
 
@@ -974,9 +1023,13 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 |---|---|---|
 | 配置 | `gfvfw/config.py` | ✅ 环境变量前缀 `GFVFW_`，阈值集中可调 |
 | 数据层 | `gfvfw/db.py` | ✅ WAL + 外键开启；可移植类型白名单 |
-| 模型（28 表） | `gfvfw/models/{identity,flight,acmi,site}.py` | ✅ 建成验证通过 |
-| ACMI 解析器 | `gfvfw/acmi_parser.py` | ✅ 58 断言 |
-| 摄入服务 | `gfvfw/services/ingest.py` | ✅ 33 断言 |
+| 模型（35 表） | `gfvfw/models/{identity,flight,acmi,campaign_state,site}.py` | ✅ 建成验证通过 |
+| ACMI 解析器 | `gfvfw/acmi_parser.py` | ✅ 65 断言 |
+| 摄入服务 | `gfvfw/services/ingest.py` | ✅ 36 断言 |
+| `.cam` 战役存档解析 | `gfvfw/campaign/` | ✅ 157 断言（含 9 份真实存档对拍） |
+| Web（SSR） | `gfvfw/web/` | ✅ 成员/日志/统计/战役/态势 |
+| 人工修正 | `gfvfw/web/routers/{missions,sorties}.py` | ✅ 67 断言 |
+| 部署产物 | `deploy/` | ✅ 手册 + systemd + Caddy + 备份 + 一键升级 |
 
 ### 10.2 可移植性的**强制机制**（不只是口头约定）
 
@@ -1014,8 +1067,39 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 ### 10.5 测试入口
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q                    # 全部（91 断言）
-.\.venv\Scripts\python.exe tests\acmi_parser_selfcheck.py  # 58 断言
-.\.venv\Scripts\python.exe tests\ingest_selfcheck.py       # 33 断言
+.\.venv\Scripts\python.exe -m pytest -q                    # 全部（701 断言 / 9 套件）
+.\.venv\Scripts\python.exe tests\acmi_parser_selfcheck.py  # 65 断言
+.\.venv\Scripts\python.exe tests\ingest_selfcheck.py       # 36 断言
+.\.venv\Scripts\python.exe tests\edit_selfcheck.py         # 67 断言
 ```
+
+### 10.6 实现期发现（Web 与战役态势阶段）
+
+| # | 问题 | 处理 |
+|---|---|---|
+| 1 | `create_all` **不会**给已存在的表加列 → 测试全绿而真实库 500 | 新增 `services/schema_sync.py`，启动时自动 `ALTER TABLE ADD COLUMN`（只加，绝不删改），并加回归测试 |
+| 2 | `CampObjData`/`squadrons` 的坐标是**英尺且 X=北 Y=东**，与 `.uni` 的网格（X=东）**轴向相反** | 在 `campaign/coords.py` 集中换算，并由 9 份真实存档与参考输出逐字段对拍确认 |
+| 3 | `.uni` 无法脱离剧场类表解析（`entityTypeId` 是**自描述**的，需 `Falcon4_CT.xml` 反查） | 明确"服务器只需剧场数据表 47.9 MB"，不需要安装 BMS（requirements §7.3.1） |
+| 4 | 审计取客户端 IP 时取 `X-Forwarded-For` **第一段**，而代理是**追加**的 → IP 可被客户端伪造 | 改为**只信任受信代理**发来的 XFF（`trusted_proxy_ips`），并由 Caddyfile `header_up` 覆盖而非追加 |
+| 5 | 测试重定向了数据库却漏掉 `storage_dir` → 产生 26 个孤儿上传存根 | 所有自检**必须同时**重定向 `settings.storage_dir` |
+| 6 | 测试用 `data=[("k","v")]`（列表）发表单 → CSRF 校验失败得 403 | 探针自身的 bug，非应用 bug；改为 `data={...}` 字典 |
+
+### 10.7 ⚠️ 本轮最重要的修正：时间基准
+
+`duration_seconds` 曾等于 `t_max`，在真实数据上把 **1.23 小时**算成 **51.51 小时**。
+完整分析见本文档"已更正的严重错误"一节。此处只记结论与防线：
+
+| 项 | 内容 |
+|---|---|
+| 正确公式 | `t0 = 文件名时间 − t_max`；`duration = t_max − t_min`；`recorded_start_at = t0 + t_min` |
+| 为何会错 | 误以为 ACMI 时间戳从 0 开始；实际相对 **`ReferenceTime`**（场景纪元） |
+| 为何测试没抓到 | 合成 ACMI 从 `#0.0` 开始 → `t_min == 0` → 两种实现**结果相同** |
+| 防线 1 | `tests/acmi_parser_selfcheck.py` 增加 `SYNTHETIC_ACMI_OFFSET_START`（首标记不为 0 的变体） |
+| 防线 2 | `tests/ingest_selfcheck.py` 断言不变量 **「任务时间窗宽度 == 录制时长」** |
+| 数据修复 | `scripts/reparse_acmi.py`（默认只预览，`--apply` 才写库） |
+| 独立核对工具 | `scripts/acmi_duration_probe.py`（自己扫时间标记，不信解析器）、`acmi_timebase_probe.py` |
+
+> 教训（值得写进任何项目的测试规范）：
+> **当"正确实现"与"错误实现"只在某类输入上才有差异时，测试必须显式构造那类输入。**
+> 只测典型样本，会让整类错误长期潜伏 —— 本例中它一路通过了 500+ 个断言。
 
