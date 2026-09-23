@@ -376,23 +376,25 @@ def main() -> int:
     status, html = s.get("/account")
     check("账号页含 Logbook 入口", "/account/logbook" in html)
 
-    print("\n[13] 三档身份：公开 / 队内边界")
+    print("\n[13] 三档身份：列表公开 / 详情队内")
     # 13a 未登录访客：只有公开页可进
-    for path in ("/", "/login", "/apply"):
+    # ⚠️ /apply 现在**需要登录**（注册与申请拆成两步），只有 /register 是公开入口。
+    for path in ("/", "/register", "/login"):
         status, _ = anon.get(path)
         check(f"访客可访问 {path}", status == 200, f"status={status}")
     # ⚠️ 用 get_raw（不跟随重定向）。跟随的话"被拦"会表现为最终落在登录页(200)，
     #    断言 303 必然假失败 —— 之前就是踩了这个。
-    for path in ("/members", "/library", "/log/campaign", "/stats",
+    # 列表页与详情页对访客都应是 303，但原因不同（列表=需登录，详情=需队员）。
+    for path in ("/apply", "/members", "/library", "/log/campaign", "/stats",
                  "/theater", "/applications", "/account"):
         status, _body, loc = anon.get_raw(path)
         check(f"★ 访客 {path} → 跳登录（303）",
               status == 303 and "/login" in loc, f"status={status} loc={loc}")
 
-    _, apply_html = anon.get("/apply")
-    check("★ 申请页公开且含表单", 'action="/apply"' in apply_html)
-    check("★ 申请页说明游客与队员的差别",
-          "游客" in apply_html and "队员" in apply_html)
+    _, reg_html = anon.get("/register")
+    check("★ 注册页公开且含表单", 'action="/register"' in reg_html)
+    check("★ 注册页说明「注册 → 申请 → 队员」三步",
+          "注册" in reg_html and "申请" in reg_html and "队员" in reg_html)
 
     # ⚠️ 导航断言必须只看 <nav> 那一块：首页正文里本来就有指向 /members 的链接，
     #    对整页做 `href="/members" not in html` 会假失败。
@@ -401,7 +403,10 @@ def main() -> int:
     check("★ 拿到导航块（后续断言的前提）", bool(anon_nav))
     for href in ("/members", "/theater", "/library", "/apply/status"):
         check(f"★ 访客导航里没有 {href}", f'href="{href}"' not in anon_nav)
-    check("★ 访客导航里有申请入口", 'href="/apply"' in anon_nav)
+    check("★ 访客导航里有注册入口", 'href="/register"' in anon_nav)
+    # ⚠️ 访客以前指向 /apply，而那个页面现在需要登录 —— 点进去只会被弹回登录页。
+    check("★ 访客导航不指向 /apply（那个页面需要先登录）",
+          'href="/apply"' not in anon_nav)
 
     # 13b 已登录的 owner：队内入口齐全
     _, home = s.get("/")
@@ -425,6 +430,10 @@ def main() -> int:
     check("进度页说明已是队员", "队员" in html)
     status, _ = s.get("/library")
     check("★ 资料查询对队员开放（200）", status == 200, f"status={status}")
+    # 队员能看到 ACMI 工作台（写操作 UI 只对队员渲染）
+    status, html = s.get("/log/campaign")
+    check("★ 队员看的 /log/campaign 含 ACMI 工作台",
+          status == 200 and "acmiWorkbench" in html, f"status={status}")
 
     return report()
 

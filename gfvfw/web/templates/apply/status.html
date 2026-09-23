@@ -6,18 +6,28 @@
   <div>
     <h1>我的申请</h1>
     <div class="sub">
-      {% if is_member %}
-        你已经是<strong>队员</strong>，队内内容全部开放。
+      {% if principal.is_member %}
+        你已经是<strong>队员</strong>，队内详情页与写操作全部开放。
       {% else %}
-        你目前是<strong>游客</strong>：可以查看公开部分，队内内容需要管理员提升后才能看到。
+        你目前是<strong>游客</strong>：各区块的列表与汇总都能看，<strong>详情页</strong>需要管理员提升后才能看到。
       {% endif %}
     </div>
   </div>
   <div>
+    {% if not principal.is_member %}
+      <a class="btn" href="/apply">提交入队申请</a>
+    {% endif %}
     <a class="btn ghost" href="/account">账号与密码</a>
     <a class="btn ghost" href="/">返回首页</a>
   </div>
 </div>
+
+{% if did == 'submitted' %}
+  <div class="flash ok">
+    <strong>申请已提交。</strong>
+    管理员人工审核，没有自动通过 —— 有进展会体现到下面的申请记录里。
+  </div>
+{% endif %}
 
 {# ------------------------------------------------------------------ #}
 {# 当前身份与能看到什么 —— 游客最需要知道"我还差哪一步" #}
@@ -29,7 +39,7 @@
       <tr>
         <th style="width:140px">身份</th>
         <td>
-          {% if is_member %}
+          {% if principal.is_member %}
             <span class="badge ok">队员</span>
             <strong>{{ principal.display_name }}</strong>
           {% else %}
@@ -46,12 +56,15 @@
       <tr>
         <th>可以查看</th>
         <td>
-          {% if is_member %}
-            队内全部内容：成员名册、飞行日志、战役与训练记录、战场态势、统计、队内资料
+          {% if principal.is_member %}
+            队内全部内容：成员名册与详情、飞行日志与架次、战役与训练记录、
+            战场态势（基地/兵力/地图）、统计、队内资料文件
           {% else %}
-            首页概览 · 本页 · 账号与密码设置
+            <strong>各区块的列表与汇总</strong>：成员名册（呼号、军衔、飞行时长等）·
+            飞行记录与飞行员累计 · 战役管理列表 · 统计与排行榜 · 资料目录
             <br><span class="muted small">
-              暂不可查看：成员名册、飞行日志、战役态势、统计、队内资料
+              暂不可查看<strong>详情页</strong>：任务详情与架次、战役态势（基地/兵力/地图）、
+              ACMI 工作台、资料文件下载、Logbook 上传
             </span>
           {% endif %}
         </td>
@@ -59,10 +72,15 @@
     </tbody>
   </table>
 
-  {% if not is_member %}
+  {% if not principal.is_member %}
     <p class="small" style="margin:12px 0 0">
-      <strong>下一步：</strong>等管理员把你的账号提升为队员。
-      提升之后刷新本页，队内内容会自动开放 —— 不需要你再做什么。
+      {% if applications %}
+        <strong>下一步：</strong>等管理员把你的账号提升为队员。
+      {% else %}
+        <strong>下一步：</strong>先在 <a href="/apply">入队申请</a> 里提交呼号意向与经历，
+        管理员审核通过后才会把你提升为队员。
+      {% endif %}
+      提升之后刷新本页，详情页会自动开放 —— 不需要你再做什么。
     </p>
   {% endif %}
 </div>
@@ -74,10 +92,11 @@
   <h2 style="margin-top:0">申请记录（{{ applications | length }}）</h2>
   {% if not applications %}
     <p class="muted small" style="margin:0">
-      {% if is_member %}
+      {% if principal.is_member %}
         你的账号是管理员直接开通的，没有对应的入队申请记录。
       {% else %}
-        没有找到申请记录。如果是管理员直接给你开的账号，这也是正常的。
+        还没有提交过入队申请 —— <a href="/apply">现在去填</a>。
+        （如果账号是管理员直接给你开的，没有申请记录也是正常的。）
       {% endif %}
     </p>
   {% else %}

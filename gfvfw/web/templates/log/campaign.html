@@ -46,7 +46,9 @@
   </div>
 </form>
 
-{% if acmi_any %}{% include "acmi/_wizard.html" %}{% endif %}
+{# ACMI 工作台（上传/认领/归并/删除）是写操作 —— 只有队员能看。
+   本页自身对游客开放（列表/汇总），所以这里必须显式判一次。 #}
+{% if acmi_any and principal.is_member %}{% include "acmi/_wizard.html" %}{% endif %}
 
 {% if totals.missions %}
 <div class="panel tight">

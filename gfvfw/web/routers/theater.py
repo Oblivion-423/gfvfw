@@ -34,7 +34,7 @@ from ...models.flight import Campaign
 from ...permissions import CAMPAIGN_MANAGE, CAMPAIGN_UPLOAD, CAMPAIGN_VIEW
 from ...services import campaign as svc
 from ...services.audit import record_audit
-from ..deps import Principal, get_db, get_principal, require
+from ..deps import Principal, get_db, require, require_login
 from ..templating import render
 from .acmi import wizard_for_request
 
@@ -167,8 +167,15 @@ def _nav_ctx(db: Session, campaign: Campaign) -> dict:
 
 @router.get("/theater")
 def theater_index(request: Request, db: Session = Depends(get_db),
-                  principal: Principal = Depends(require(CAMPAIGN_VIEW))):
-    """战役管理首页：所有带存档的战役 + 最新态势摘要。"""
+                  principal: Principal = Depends(require_login)):
+    """战役管理首页：所有带存档的战役 + 最新态势摘要。
+
+    ⚠️ 列表页 —— 游客可看（"只开列表，不开详情"）。
+    各战役的**详情**（态势图 / 基地 / 兵力 / 目标点 / 时间线）仍是
+    ``require(CAMPAIGN_VIEW)``，即仅队员。
+    写操作入口由模板里的 ``can_upload`` / ``can_manage`` 自行隐藏，
+    游客这两项都是 ``False``（没有任何权限点）。
+    """
 
     campaigns = list(db.scalars(
         select(Campaign).where(Campaign.deleted_at.is_(None))

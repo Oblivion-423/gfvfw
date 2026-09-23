@@ -20,11 +20,11 @@ from sqlalchemy.orm import Session
 from ...db import utcnow
 from ...models import AcmiFile, Campaign, Member, Mission, Sortie, SortieEvent
 from ...permissions import (
-    CAMPAIGN_MANAGE, LOG_DELETE, LOG_EDIT_ANY, LOG_EDIT_OWN, LOG_VIEW,
+    CAMPAIGN_MANAGE, LOG_DELETE, LOG_EDIT_ANY, LOG_EDIT_OWN,
 )
 from ...services import campaigns as CS
 from ...services.audit import record_audit
-from ..deps import Principal, get_db, require
+from ..deps import Principal, get_db, require, require_login, require_member
 from ..forms import FieldError, local_input_value, parse_local_datetime
 from ..templating import render
 
@@ -53,7 +53,7 @@ VISIBILITY_LABELS = {"public": "公开", "members": "内部", "command": "指挥
 
 @router.get("")
 def mission_list(request: Request,
-                 principal: Principal = Depends(require(LOG_VIEW)),
+                 principal: Principal = Depends(require_login),
                  db: Session = Depends(get_db)):
 
     rows = db.execute(
@@ -295,7 +295,7 @@ def mission_set_campaign(mission_id: str, request: Request,
 
 @router.get("/{mission_id}")
 def mission_detail(mission_id: str, request: Request,
-                   principal: Principal = Depends(require(LOG_VIEW)),
+                   principal: Principal = Depends(require_member),
                    db: Session = Depends(get_db)):
 
     mission = db.get(Mission, mission_id)

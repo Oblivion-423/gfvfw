@@ -85,9 +85,19 @@
 </div>
 {% endif %}
 
+{% if not principal.is_member %}
+{# 游客：名册列表开放（联队要求公开呼号/军衔/飞行时长），但点进详情会被拦。
+   提前说清楚，避免让他以为页面坏了。 #}
+<div class="flash info">
+  <strong>你目前是游客</strong>：名册的呼号、军衔、飞行时长等汇总数据都能看；
+  点某个人看<strong>详情</strong>（角色、Logbook 归档、档案可见性）需要队员身份。
+  <a href="/apply">提交入队申请</a>
+</div>
+{% endif %}
+
 {% if not can_manage %}
 <p class="muted small">
-  你当前的身份为「{{ principal.primary_role_name }}」，只能查看名册，无法新增或修改。
+  你当前的身份为「{{ principal.identity_label }}」，只能查看名册，无法新增或修改。
 </p>
 {% endif %}
 {% endblock %}

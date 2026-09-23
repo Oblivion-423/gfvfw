@@ -22,10 +22,10 @@ from sqlalchemy.orm import Session
 
 from ...db import utcnow
 from ...models import Campaign, Mission
-from ...permissions import CAMPAIGN_MANAGE, LOG_VIEW
+from ...permissions import CAMPAIGN_MANAGE
 from ...services import campaigns as CS
 from ...services.audit import record_audit
-from ..deps import Principal, get_db, require
+from ..deps import Principal, get_db, require, require_login, require_member
 from ..templating import render
 
 router = APIRouter(prefix="/campaigns")
@@ -72,7 +72,7 @@ def _fmt_day(dt: Optional[datetime]) -> str:
 
 @router.get("")
 def campaign_list(request: Request,
-                  principal: Principal = Depends(require(LOG_VIEW)),
+                  principal: Principal = Depends(require_login),
                   db: Session = Depends(get_db)):
     return render(request, "campaigns/list.html", {
         **_ctx(),
@@ -155,7 +155,7 @@ def campaign_create(request: Request,
 
 @router.get("/{campaign_id}")
 def campaign_detail(campaign_id: str, request: Request,
-                    principal: Principal = Depends(require(LOG_VIEW)),
+                    principal: Principal = Depends(require_member),
                     db: Session = Depends(get_db)):
     c = db.get(Campaign, campaign_id)
     if c is None or c.deleted_at is not None:

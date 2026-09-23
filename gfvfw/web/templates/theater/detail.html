@@ -19,7 +19,7 @@
 
 {# ACMI 工作台：战役固定为当前战役，归并出的任务直接归入它。
    放在存档判断之外 —— 没有 .cam 存档也能先上传 ACMI。 #}
-{% if acmi_any %}{% include "acmi/_wizard.html" %}{% endif %}
+{% if acmi_any and principal.is_member %}{% include "acmi/_wizard.html" %}{% endif %}
 
 {% if saved %}
   <div class="flash ok">存档已入库。</div>

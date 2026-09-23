@@ -3,7 +3,10 @@
 
 权限
 ----
-* 查看：``MEMBER_VIEW``（门槛低，成员与教官均可见）
+* 名册列表 ``GET /members``：``require_login`` —— **游客也能看**
+  （呼号、军衔、飞行时长等汇总列；这是联队明确要求的"公开部分"）
+* 成员详情 ``GET /members/{id}``：``require_member`` —— 仅队员
+  （含角色、档案可见性、Logbook 归档与管理入口）
 * 增删改：``MEMBER_CREATE`` / ``MEMBER_EDIT`` / ``MEMBER_DELETE``
 * 军衔变更：``MEMBER_EDIT_RANK``（敏感，单独一个权限点）
 """
@@ -25,11 +28,13 @@ from ...models import (
 )
 from ...permissions import (
     LOGBOOK_UPLOAD_ANY, MEMBER_CREATE, MEMBER_DELETE, MEMBER_EDIT,
-    MEMBER_EDIT_RANK, MEMBER_VIEW,
+    MEMBER_EDIT_RANK,
 )
 from ...services import logbook as LB
 from ...services.audit import record_audit
-from ..deps import Principal, get_db, get_principal, require
+from ..deps import (
+    Principal, get_db, require, require_login, require_member,
+)
 from ..templating import render
 
 router = APIRouter(prefix="/members")
@@ -98,7 +103,7 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
 def member_list(request: Request,
                 q: str = "",
                 status: str = "",
-                principal: Principal = Depends(require(MEMBER_VIEW)),
+                principal: Principal = Depends(require_login),
                 db: Session = Depends(get_db)):
 
     stmt = select(Member).where(Member.deleted_at.is_(None))
@@ -168,7 +173,7 @@ def member_new_form(request: Request,
 
 @router.get("/{member_id}")
 def member_detail(member_id: str, request: Request,
-                  principal: Principal = Depends(require(MEMBER_VIEW)),
+                  principal: Principal = Depends(require_member),
                   db: Session = Depends(get_db)):
 
     member = db.get(Member, member_id)

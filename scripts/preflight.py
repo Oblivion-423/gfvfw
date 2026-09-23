@@ -95,8 +95,8 @@ def main() -> int:
         print("\n[3] 首个管理员（create-admin 的等价路径）")
         # ---------------------------------------------------------------
         from gfvfw.security import hash_password
-        from gfvfw.models import Member, MemberRole, Role, User
-        from sqlalchemy import select
+        from gfvfw.models import Application, Member, MemberRole, Role, User
+        from sqlalchemy import func, select
         with SessionLocal() as s:
             m = Member(callsign="Viper", status="active")
             s.add(m)
@@ -149,43 +149,62 @@ def main() -> int:
             # -----------------------------------------------------------
             print("\n[5] 空库上的三档身份（按生产的 https 协议）")
             # -----------------------------------------------------------
-            for path in ("/", "/apply", "/login"):
+            for path in ("/", "/register", "/login"):
                 check("访客可访问 %s" % path,
                       client.get(path).status_code == 200)
-            for path in ("/members", "/library", "/stats", "/applications"):
+            # ⚠️ /apply 现在**需要登录**（注册与申请已拆成两步），
+            #    所以它出现在"被拦"这一组，不再是公开页。
+            for path in ("/apply", "/members", "/library", "/stats",
+                         "/applications"):
                 rr = client.get(path, follow_redirects=False)
                 check("★ 访客 %s 被拦（303）" % path, rr.status_code == 303,
                       "得到 %d" % rr.status_code)
 
-            # 公开申请 → 游客
-            page = client.get("/apply")
+            # 第一步：公开注册 → 游客账号（**不建申请**）
+            page = client.get("/register")
             tok = _CSRF_RE.search(page.text).group(1)
-            r = client.post("/apply", data={
-                "callsign": "Newbie", "username": "newbie",
+            r = client.post("/register", data={
+                "username": "newbie", "email": "",
                 "password": "newbie-password-1",
                 "confirm_password": "newbie-password-1",
-                "email": "", "experience": "", "intent": "", "contact": "",
                 "csrf_token": tok,
             }, follow_redirects=False)
-            check("★ 空库上公开申请可提交", r.status_code == 303,
+            check("★ 空库上公开注册可提交", r.status_code == 303,
                   "得到 %d" % r.status_code)
 
             with SessionLocal() as s:
                 guest = s.scalar(select(User).where(User.username == "newbie"))
-                check("★ 申请即得游客账号（pending）",
+                check("★ 注册即得游客账号（pending）",
                       guest is not None and guest.status == "pending")
+                check("★ 注册**不建**入队申请（注册 ≠ 申请）",
+                      s.scalar(select(func.count()).select_from(Application)
+                               .where(Application.resulting_user_id
+                                      == guest.id)) == 0)
 
-            # 游客登录 → 队内 403
-            page = client.get("/login")
-            client.post("/login", data={"username": "newbie",
-                                       "password": "newbie-password-1",
-                                       "csrf_token": _CSRF_RE.search(
-                                           page.text).group(1)},
-                        follow_redirects=False)
-            rr = client.get("/members", follow_redirects=False)
-            check("★ 游客 /members → 403（而不是跳登录）",
+            # 第二步：游客提交入队申请（需登录；注册已自动登录）
+            page = client.get("/apply")
+            check("★ 注册后自动登录，可直接打开入队申请页",
+                  page.status_code == 200, "得到 %d" % page.status_code)
+            r = client.post("/apply", data={
+                "callsign": "Newbie", "experience": "", "intent": "",
+                "contact": "", "csrf_token": _CSRF_RE.search(page.text).group(1),
+            }, follow_redirects=False)
+            check("★ 游客可提交入队申请", r.status_code == 303,
+                  "得到 %d" % r.status_code)
+
+            # 游客：列表页全开，详情页 403
+            for path in ("/members", "/theater", "/log/campaign",
+                         "/log/training", "/log/pilots", "/log",
+                         "/stats", "/library"):
+                rr = client.get(path, follow_redirects=False)
+                check("★ 游客可看列表页 %s" % path, rr.status_code == 200,
+                      "得到 %d" % rr.status_code)
+            rr = client.get("/members/00000000-0000-0000-0000-000000000000",
+                            follow_redirects=False)
+            check("★ 游客详情页 → 403（而不是跳登录）",
                   rr.status_code == 403, "得到 %d" % rr.status_code)
             check("★ 403 说明了需要队员身份", "队员" in rr.text)
+            check("★ 403 说明游客能看列表与汇总", "列表与汇总" in rr.text)
 
         # 提升为队员
         with TestClient(app, base_url="https://gfvfw.test") as client:
@@ -218,6 +237,11 @@ def main() -> int:
                 rr = client.get(path, follow_redirects=False)
                 check("★ 提升后 %s 可访问" % path, rr.status_code == 200,
                       "得到 %d" % rr.status_code)
+            # 详情页此时应当**放行**（404 = 守卫过了但数据不存在）
+            rr = client.get("/campaigns/00000000-0000-0000-0000-000000000000",
+                            follow_redirects=False)
+            check("★ 提升后详情页守卫放行（404 而非 403）",
+                  rr.status_code == 404, "得到 %d" % rr.status_code)
 
         # ---------------------------------------------------------------
         print("\n[6] 备份可用（VACUUM INTO + 打包）")

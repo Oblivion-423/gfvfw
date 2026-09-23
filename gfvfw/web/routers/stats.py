@@ -21,9 +21,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...models import Campaign, Member, Mission, Sortie
-from ...permissions import LOG_VIEW
 from ...services import stats as S
-from ..deps import Principal, get_db, require
+from ..deps import Principal, get_db, require_login
 from ..templating import render
 from .acmi import wizard_for_request
 
@@ -41,7 +40,7 @@ CONFIDENCE_BADGE = {"exact": "ok", "partial": "warn", "estimated": "danger"}
 
 @router.get("/stats")
 def stats_page(request: Request,
-               principal: Principal = Depends(require(LOG_VIEW)),
+               principal: Principal = Depends(require_login),
                db: Session = Depends(get_db)):
     return render(request, "stats/overview.html", {
         "ov": S.overview(db),
@@ -68,7 +67,7 @@ def log_query(request: Request,
               date_to: str = "",
               confidence: str = "",
               include_unclaimed: str = "1",
-              principal: Principal = Depends(require(LOG_VIEW)),
+              principal: Principal = Depends(require_login),
               db: Session = Depends(get_db)):
 
     f = S.SortieFilter(
@@ -148,7 +147,7 @@ def log_campaign(request: Request,
                  campaign_id: str = "",
                  date_from: str = "",
                  date_to: str = "",
-                 principal: Principal = Depends(require(LOG_VIEW)),
+                 principal: Principal = Depends(require_login),
                  db: Session = Depends(get_db)):
     """战役记录 —— 归入战役的任务列表（战史视角）。"""
     campaigns = list(db.scalars(
@@ -218,7 +217,7 @@ def log_training(request: Request,
                  date_from: str = "",
                  date_to: str = "",
                  include_campaign: str = "0",
-                 principal: Principal = Depends(require(LOG_VIEW)),
+                 principal: Principal = Depends(require_login),
                  db: Session = Depends(get_db)):
     """训练记录 —— 训练类任务。
 
@@ -292,7 +291,7 @@ def log_training(request: Request,
 @router.get("/log/pilots")
 def log_pilots(request: Request,
                member_id: str = "",
-               principal: Principal = Depends(require(LOG_VIEW)),
+               principal: Principal = Depends(require_login),
                db: Session = Depends(get_db)):
     """飞行员个人记录 —— 选择成员后看其全部架次明细。"""
     members = list(db.scalars(

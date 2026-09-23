@@ -9,18 +9,30 @@
 
     {% if member_required %}
       {# ⚠️ 游客已登录，把他重定向到登录页会造成「点→回登录→再点」的死循环，
-         所以这里明确告诉他差的是"被提升为队员"这一步。 #}
+         所以这里明确告诉他差的是"被提升为队员"这一步，
+         并且老实列出他现在**能**看什么 —— 否则他会以为整个系统都是锁的。 #}
       <p class="small muted">
         你当前的账号
         <strong>{{ principal.display_name }}</strong>
         是<strong>游客</strong>：已注册，但还没有被管理员提升为队员。
       </p>
-      <p class="small muted">
-        游客可以查看：首页概览、自己的申请进度、账号与密码设置。<br>
-        队员可以查看：成员名册、飞行日志、战役与训练记录、战场态势、统计、队内资料。
-      </p>
+      <table class="small" style="margin:0 auto 14px; text-align:left; max-width:560px">
+        <tbody>
+          <tr>
+            <th style="width:88px">游客可看</th>
+            <td>各区块的<strong>列表与汇总</strong>：成员名册（呼号、军衔、飞行时长等）·
+                飞行记录 · 战役管理列表 · 统计与排行榜 · 资料目录</td>
+          </tr>
+          <tr>
+            <th>仅队员</th>
+            <td><strong>详情页</strong>与写操作：任务详情与架次、战役态势（基地/兵力/地图）、
+                ACMI 工作台、资料文件下载、Logbook 上传</td>
+          </tr>
+        </tbody>
+      </table>
       <div class="actions" style="justify-content:center">
-        <a class="btn" href="/apply/status">查看我的申请进度</a>
+        <a class="btn" href="/apply">提交 / 查看入队申请</a>
+        <a class="btn ghost" href="/apply/status">申请进度</a>
         <a class="btn ghost" href="/">返回首页</a>
       </div>
     {% else %}

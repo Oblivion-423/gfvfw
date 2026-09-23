@@ -1,4 +1,8 @@
-"""打印公开申请页与审批页的可读文本（人工过目用）。"""
+"""打印注册页 / 入队申请页 / 审批页的可读文本（人工过目用）。
+
+三步流程：``/register``（公开，建游客账号）→ ``/apply``（需登录，提申请）
+→ ``/applications``（管理员提升为队员）。
+"""
 import os
 import re
 import sqlite3
@@ -39,22 +43,30 @@ def text_of(html: str) -> str:
 
 app = create_app()
 print("#" * 74)
-print("# 未登录访客看到的 /apply")
+print("# ① 未登录访客看到的 /register（公开，只建游客账号）")
 print("#" * 74)
 with TestClient(app) as anon:
-    print(text_of(anon.get("/apply").text))
+    print(text_of(anon.get("/register").text))
 
 print()
 print("#" * 74)
-print("# 未登录访客看到的 / （首页身份提示 + 导航）")
+print("# ② 未登录访客访问 /apply → 需要先登录（现在是 303 跳登录）")
+print("#" * 74)
+with TestClient(app) as anon:
+    r = anon.get("/apply", follow_redirects=False)
+    print("status=%d  location=%s" % (r.status_code, r.headers.get("location")))
+
+print()
+print("#" * 74)
+print("# ③ 未登录访客看到的 / （首页身份提示 + 导航）")
 print("#" * 74)
 with TestClient(app) as anon:
     body = text_of(anon.get("/").text)
-print("\n".join(body.splitlines()[:22]))
+print("\n".join(body.splitlines()[:24]))
 
 print()
 print("#" * 74)
-print("# 管理员看到的 /applications")
+print("# ④ 管理员看到的 /applications")
 print("#" * 74)
 # 造一个待审批游客，才能看到审批行的形态
 c = sqlite3.connect(str(ROOT / "var" / "probe" / "snapshot.sqlite3"))

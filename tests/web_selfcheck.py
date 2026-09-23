@@ -410,28 +410,51 @@ def main() -> int:
                 r = client.get("/members/new")
                 check("联队指挥可新建成员", r.status_code == 200)
 
-            print("\n[7] 未激活账号只读（游客档）")
+            print("\n[7] 未激活账号 = 游客档：列表可看，详情 403")
+            # ⚠️ 真实的游客**不绑定名册成员**（注册只建账号）。
+            #    这里刻意不借用 make_user（它会顺手建成员 + 给角色），
+            #    否则测的就不是游客的真实形状了。
             with TestSession() as db:
-                pend_mid, pend_user = make_user(db, TestSession, "Pending",
-                                               "member", status="pending")
+                db.add(User(username="pending",
+                            password_hash=hash_password("password123"),
+                            status="pending", member_id=None))
+                db.commit()
             with TestClient(app) as client:
                 page = client.get("/login")
                 token = csrf_of(page.text)
-                r = client.post("/login", data={"username": pend_user,
+                r = client.post("/login", data={"username": "pending",
                                                "password": "password123",
                                                "csrf_token": token},
                                 follow_redirects=False)
                 check("待审批账号可登录（有提示）", r.status_code == 303,
                       "得到 %d" % r.status_code)
-                r = client.get("/members", follow_redirects=False)
+
+                # ★ 列表/汇总页对游客开放（联队口径"公开部分"）
+                for path in ("/members", "/theater", "/log/campaign",
+                             "/log/training", "/log/pilots", "/log",
+                             "/stats", "/library"):
+                    r = client.get(path, follow_redirects=False)
+                    check("★ 游客可看列表页 %s" % path, r.status_code == 200,
+                          "得到 %d" % r.status_code)
+
+                # ★ 详情页仅队员：403 说明页，不是跳登录
                 # ⚠️ 这里曾经断言 303（跳登录）。但游客**已经登录**，
                 #    重定向会造成「点→回登录→再点」的死循环，用户看不出
                 #    自己差的是"被提升为队员"这一步。现在改为 403 说明页。
-                check("★ 待审批账号访问名册 → 403（说明需要队员身份）",
+                r = client.get("/members/%s" % member_mid, follow_redirects=False)
+                check("★ 游客访问成员详情 → 403（说明需要队员身份）",
                       r.status_code == 403, "得到 %d" % r.status_code)
-                check("★ 403 页面给出申请进度入口", "/apply/status" in r.text)
+                check("★ 403 页面给出入队申请入口", "/apply" in r.text)
+                check("★ 403 页面说明游客能看列表", "列表与汇总" in r.text)
+
+                # ★ 写操作 UI 必须从游客可见的列表页上消失
+                html = client.get("/log/campaign").text
+                check("★ 游客看的 /log/campaign 不含 ACMI 工作台",
+                      "/acmi/upload" not in html)
+
                 r = client.get("/")
                 check("★ 待审批账号首页显示「游客」身份", "游客" in r.text)
+                check("★ 待审批账号导航里有「入队申请」", "/apply" in r.text)
 
             print("\n[8] 软删除（R11）")
             with TestClient(app) as client:

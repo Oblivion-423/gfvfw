@@ -3,42 +3,52 @@
 
 {% block content %}
 <div class="auth-wrap" style="max-width:680px">
-  <h1>申请加入联队</h1>
+  <h1>提交入队申请</h1>
 
-  {% if did == 'submitted' %}
+  {% if did == 'registered' %}
     <div class="flash ok">
-      <strong>申请已提交。</strong>
-      我们已为你开通一个<strong>游客</strong>账号 —— 现在就可以用它登录，
-      在「我的申请」里查看进度。管理员审核通过后，你会被提升为<strong>队员</strong>，
-      届时队内资料自动开放。
+      <strong>注册成功，已为你登录。</strong>
+      你现在是<strong>游客</strong> —— 各区块的列表与汇总都能看了。
+      填完下面这份申请，管理员就会把你提升为<strong>队员</strong>。
     </div>
   {% endif %}
   {% if error %}<div class="flash warn">{{ error }}</div>{% endif %}
 
+  {% if principal.is_member %}
+    <div class="flash ok">
+      你已经是<strong>队员</strong>了，队内详情页全部开放，不需要再提交申请。
+      <a href="/apply/status">查看历史申请</a>
+    </div>
+  {% elif existing %}
+    {# 已经提交过、还没被拒 —— 不要让他重复提交，直接给进度入口 #}
+    {% set label, explain = status_labels.get(existing.status, (existing.status, '')) %}
+    <div class="flash info">
+      你已经在 <strong>{{ existing.created_at | datetime }}</strong> 提交过入队申请
+      （想用的呼号 <strong>{{ existing.desired_callsign }}</strong>），
+      当前状态：<span class="badge">{{ label }}</span> —— {{ explain }}
+      <br><a href="/apply/status">查看申请进度</a>
+    </div>
+  {% endif %}
+
   <div class="panel">
-    <h2 style="margin-top:0">你会得到什么</h2>
+    <h2 style="margin-top:0">当前身份：游客</h2>
     <table class="small">
-      <thead><tr><th style="width:110px">身份</th><th>能看到什么</th></tr></thead>
       <tbody>
         <tr>
-          <td><strong>未登录访客</strong></td>
-          <td>首页概览、本申请页</td>
+          <th style="width:130px">现在能看</th>
+          <td>成员名册（呼号、军衔、飞行时长等）· 战役列表 · 飞行记录列表 ·
+              统计 · 资料目录</td>
         </tr>
         <tr>
-          <td><strong>游客</strong>（提交申请后立即获得）</td>
-          <td>首页概览、自己的申请进度、账号与密码设置。<strong>看不到</strong>名册、飞行记录、战役态势、统计与队内资料</td>
-        </tr>
-        <tr>
-          <td><strong>队员</strong>（管理员提升后）</td>
-          <td>队内全部内容：成员名册、飞行日志、战役与训练记录、战场态势、统计查询、队内资料</td>
+          <th>成为队员后</th>
+          <td>再加上<strong>详情页</strong>：任务详情与架次、战役态势（基地/兵力/地图）、
+              ACMI 工作台（上传与归并）、资料文件下载、Logbook 上传</td>
         </tr>
       </tbody>
     </table>
-    <p class="small muted" style="margin:10px 0 0">
-      申请是<strong>公开的、随时可以提交</strong>。本页不需要登录。
-    </p>
   </div>
 
+  {% if not principal.is_member and not existing %}
   <div class="panel">
     <h2 style="margin-top:0">申请信息</h2>
     <form method="post" action="/apply">
@@ -51,37 +61,8 @@
                value="{{ form.callsign if form else '' }}">
         <span class="hint">
           建议与你在 BMS 里的游戏内呼号一致 —— 上传 Logbook 与 ACMI 时要靠它对上人。
+          <strong>呼号必须唯一</strong>，重名会被拒绝。
         </span>
-      </div>
-
-      <div class="field" style="margin-bottom:14px">
-        <label for="username">登录用户名 <span class="muted">（必填）</span></label>
-        <input type="text" id="username" name="username" required maxlength="64"
-               autocomplete="username"
-               value="{{ form.username if form else '' }}">
-        <span class="hint">用于登录，不能有空格。可以就用呼号。</span>
-      </div>
-
-      <div class="field" style="margin-bottom:14px">
-        <label for="password">设置密码 <span class="muted">（必填）</span></label>
-        <input type="password" id="password" name="password" required
-               autocomplete="new-password">
-      </div>
-
-      <div class="field" style="margin-bottom:14px">
-        <label for="confirm_password">再输一次密码 <span class="muted">（必填）</span></label>
-        <input type="password" id="confirm_password" name="confirm_password" required
-               autocomplete="new-password">
-        <span class="hint">
-          密码是单向加密保存的，<strong>找不回来</strong>。忘了只能由管理员重置。
-        </span>
-      </div>
-
-      <div class="field" style="margin-bottom:14px">
-        <label for="email">邮箱 <span class="muted">（可选）</span></label>
-        <input type="text" id="email" name="email" maxlength="254"
-               value="{{ form.email if form else '' }}">
-        <span class="hint">只用于联系，不公开。</span>
       </div>
 
       <div class="field" style="margin-bottom:14px">
@@ -107,14 +88,14 @@
 
       <div class="actions">
         <button class="btn" type="submit">提交申请</button>
-        <a class="btn ghost" href="/login">已有账号，去登录</a>
+        <a class="btn ghost" href="/">先去逛逛</a>
       </div>
     </form>
   </div>
+  {% endif %}
 
   <p class="muted small" style="text-align:center">
-    提交后如果看到「今天从这个网络提交的申请太多了」，说明同一网络当天申请已达上限，
-    请明天再试或直接联系管理员。
+    审核由管理员人工完成，没有自动通过。长时间没进展可以直接联系管理员。
   </p>
 </div>
 {% endblock %}

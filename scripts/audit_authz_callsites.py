@@ -44,23 +44,39 @@ def main() -> int:
         print(path.name)
         for i in hits:
             total += 1
-            dec = defn = None
-            for j in range(i, max(-1, i - 120), -1):
-                if defn is None and re.match(r"\s*def ", lines[j]):
-                    defn = j
-                if dec is None and "@router." in lines[j]:
+            # ⚠️ 必须先找**装饰器**，再从装饰器往后找 def —— 反过来会被
+            #    路由体里的内层辅助函数（如 ``def fail(msg)``）抢先命中，
+            #    于是把内层函数的签名当成路由守卫，报出"无守卫"的假警报。
+            dec = None
+            for j in range(i, max(-1, i - 200), -1):
+                if "@router." in lines[j]:
                     dec = j
-                if dec is not None and defn is not None:
                     break
+            defn = None
+            if dec is not None:
+                for j in range(dec, min(len(lines), dec + 40)):
+                    # ⚠️ 必须容忍 ``async def`` —— 只匹配 ``^\s*def ``
+                    #    会跳过异步路由，一路找不到函数而把守卫报成"无"。
+                    if re.match(r"\s*(?:async\s+)?def ", lines[j]):
+                        defn = j
+                        break
 
             sig = gather_signature(lines, defn) if defn is not None else ""
-            guarded = ("require(" in sig) or ("require_login" in sig)
+            # ⚠️ 四个守卫都要认：只查 "require(" 与 "require_login" 会把
+            #    require_member / require_any 守卫的路由误报成"无守卫"，
+            #    而"列表公开、详情仅队员"的改法正好大量使用 require_member。
+            guarded = any(tok in sig for tok in (
+                "require(", "require_any(", "require_login", "require_member"))
             name = lines[defn].strip() if defn is not None else "?"
             deco = lines[dec].strip() if dec is not None else "?"
-            mark = "受守卫" if guarded else "★ 无 require() 守卫"
+            if dec is None:
+                # 没有 @router. 装饰器 ⟶ 这是辅助函数，守卫由其调用方提供。
+                mark = "（辅助函数，守卫在调用方）"
+            else:
+                mark = "受守卫" if guarded else "★ 无 require() 守卫"
             print("  L%-4d %-46s %s" % (i + 1, deco[:46], mark))
             print("         %s" % name[:70])
-            if not guarded:
+            if dec is not None and not guarded:
                 unguarded.append("%s:%d %s" % (path.name, i + 1, deco))
 
     print("=" * 74)

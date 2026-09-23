@@ -6,8 +6,14 @@
   <div>
     <h1>入队审批</h1>
     <div class="sub">
-      把<strong>游客</strong>提升为<strong>队员</strong>。提升后该账号立刻获得队内权限
-      （名册、飞行日志、战役态势、统计、队内资料）。
+      把<strong>游客</strong>提升为<strong>队员</strong>。提升是<strong>唯一的授权动作</strong> ——
+      之后该账号才能看到<strong>详情页</strong>与写操作
+      （任务详情与架次、战役态势、ACMI 工作台、资料下载、Logbook 上传）。
+      <br>
+      <span class="muted small">
+        游客已经能看各区块的<strong>列表与汇总</strong>（名册、飞行记录、战役列表、统计、资料目录），
+        所以这里列出的可能有"注册了但还没提交申请"的账号。
+      </span>
     </div>
   </div>
   <div>
@@ -23,16 +29,19 @@
 {# 待审批的游客 #}
 {# ------------------------------------------------------------------ #}
 <div class="panel">
+  {% set no_app = rows | rejectattr('application') | list | length %}
   <h2 style="margin-top:0">
     待审批的游客（{{ rows | length }}）
     <span class="muted small" style="font-weight:400">
       · 当前队员 {{ active_count }} 人
+      {% if no_app %}· 其中 {{ no_app }} 个只注册、未申请{% endif %}
     </span>
   </h2>
 
   {% if not rows %}
     <p class="muted small" style="margin:0">
-      没有待审批的游客。有人提交<a href="/apply">入队申请</a>后会出现在这里。
+      没有待审批的游客。有人<a href="/register">注册</a>或提交
+      <a href="/apply">入队申请</a>后会出现在这里。
     </p>
   {% else %}
     <table>

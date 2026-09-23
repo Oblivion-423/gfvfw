@@ -48,6 +48,10 @@
   </table>
   <p class="small muted" style="margin-bottom:0">
     数据库表（<code>documents</code>）已建好，缺的是上传与检索界面。
+    {% if not principal.is_member %}
+      <br><strong>你目前是游客</strong>：这一页（资料目录）对你开放，
+      但将来真正的文件<strong>下载</strong>仍仅限队员。
+    {% endif %}
   </p>
 </div>
 
@@ -56,6 +60,11 @@
   <p class="small">
     ACMI 原件已归档保存。要看回放可从任务详情页下载原件，
     用本地 Tacview 打开 —— <strong>系统不做网页轨迹回放</strong>。
+    {% if not principal.is_member %}
+      <br><span class="muted">
+        任务详情页属于队内详情，需要队员身份；你现在可以先看战役记录与飞行员汇总。
+      </span>
+    {% endif %}
   </p>
   <div class="actions">
     <a class="btn" href="/log/campaign">战役记录</a>

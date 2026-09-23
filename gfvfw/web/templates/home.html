@@ -93,6 +93,11 @@
   </table>
   <p class="small muted" style="margin-bottom:0">
     进阶入口：<a href="/stats">统计</a>、<a href="/log">高级查询</a>。
+    {% if not principal.is_member %}
+      <br>
+      <strong>你目前是游客：</strong>以上每一项的<strong>列表与汇总</strong>都能进；
+      点进<strong>详情</strong>（任务架次、战场态势、ACMI 工作台）才需要队员身份。
+    {% endif %}
   </p>
 </div>
 
@@ -126,6 +131,9 @@
     删除任务等于<b>撤销这次归并</b>（原始文件会退回待归并，可重新归并或删除）。
     所有人工改动都会写入审计日志，并标记为「手动/估算」，不会与 ACMI 原始解析结果混淆。
     操作清单见仓库内 <code>deploy/DEPLOY.md</code> 的「上线后的人工修正」一节。
+    {% if not principal.is_member %}
+      <br><strong>ACMI 工作台仅队员可用</strong> —— 这是唯一的写入口，游客看不到它。
+    {% endif %}
   </p>
 </div>
 
@@ -136,17 +144,26 @@
     {% if principal.is_guest %}
       你是<strong>游客</strong>（账号
       <span class="badge warn">{{ USER_STATUS_LABELS.get(principal.user.status, principal.user.status) }}</span>）：
-      已注册，但还没有被管理员提升为队员，因此只能查看公开内容。
+      已注册，但还没有被管理员提升为队员。
       <br>
-      <a href="/apply/status">查看我的申请进度</a> —— 管理员提升后，队内内容会自动开放。
+      <strong>能看：</strong>各区块的<strong>列表与汇总</strong> —— 成员名册（呼号、军衔、飞行时长等）、
+      飞行记录、战役管理列表、统计与排行榜、资料目录。
+      <br>
+      <strong>还不能看：</strong>详情页与写操作 —— 任务详情与架次、战役态势（基地/兵力/地图）、
+      ACMI 工作台、资料文件下载、Logbook 上传。
+      <br>
+      <a href="/apply">提交入队申请</a> ·
+      <a href="/apply/status">查看我的申请进度</a>
+      —— 管理员提升后，详情页会自动开放。
     {% elif principal.is_authenticated %}
       你已登录，但账号状态为
       <span class="badge warn">{{ principal.user.status }}</span>，
       暂时只能查看公开内容，无法进入内部数据。
     {% else %}
-      你以<strong>访客</strong>身份浏览，仅能看到公开内容。
-      想查看成员名册、飞行日志与战场态势，请
-      <a href="/apply">提交入队申请</a>，由管理员提升为队员。
+      你以<strong>访客</strong>身份浏览，目前只能看到这一页的汇总数字。
+      想查看成员名册、飞行记录、战役管理与统计，请先
+      <a href="/register">注册账号</a>（立刻成为<strong>游客</strong>，上述列表随即开放），
+      再<a href="/apply">提交入队申请</a>，由管理员提升为队员后开放详情页。
     {% endif %}
   </p>
 </div>

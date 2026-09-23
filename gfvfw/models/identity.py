@@ -110,6 +110,14 @@ class User(IdMixin, TimestampMixin, Base):
     #: 也为将来做"强制定期改密"留出依据。新增列由 schema_sync 自动补上。
     password_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    #: **注册时**的来源 IP 哈希（防刷，需求 R7；只存哈希不存明文 IP）。
+    #:
+    #: ⚠️ 为什么不能复用 ``Application.source_ip_hash``：注册与申请现在是
+    #:    两步（联队要求"注册之后再提交申请"），注册那一刻还没有申请记录。
+    #:    要限制"同 IP 每天注册几个"，就必须在**注册**时把来源记下来。
+    #:    复用 ``privacy_hash``，与审计记录同一套哈希。
+    registration_ip_hash: Mapped[Optional[str]] = mapped_column(String(128))
+
     member: Mapped[Optional["Member"]] = relationship(
         back_populates="user",
         foreign_keys="User.member_id",

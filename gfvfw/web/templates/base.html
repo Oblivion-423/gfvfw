@@ -19,8 +19,13 @@
 
         {# ⚠️ 导航必须与真实权限一致：点了就看到"需要队员身份"的页面
            比菜单里根本没有更让人困惑。所以每一项都用权限点判定，
-           而不是一律显示。 #}
-        {% if principal.is_member %}
+           而不是一律显示。
+
+           但"公开部分"是个例外口径：**列表 / 汇总页对游客开放**，
+           详情页与写操作才需要队员。所以五个业务区块对"已登录"
+           （队员 + 游客）一律显示 —— 隐藏它们反而会让游客以为
+           系统是空的。详情页上的限制由 MemberRequired 说明页解释。 #}
+        {% if principal.is_authenticated %}
           <a href="/members" class="{{ 'active' if current_path.startswith('/members') else '' }}">成员</a>
 
           <a href="/theater" class="{{ 'active' if current_path.startswith('/theater') else '' }}">战役管理</a>
@@ -41,9 +46,8 @@
 
           <a href="/library" class="{{ 'active' if current_path.startswith('/library') else '' }}">资料查询</a>
 
-          {% if principal.can('log.view') %}
-            <a href="/stats" class="{{ 'active' if current_path.startswith('/stats') else '' }}">统计</a>
-          {% endif %}
+          {# 统计对游客也开放（联队口径"全部统计都给"，含个人排行榜） #}
+          <a href="/stats" class="{{ 'active' if current_path.startswith('/stats') else '' }}">统计</a>
 
           {% if principal.can('application.review') %}
             <a href="/applications" class="{{ 'active' if current_path.startswith('/applications') else '' }}">
@@ -53,15 +57,19 @@
               {% endif %}
             </a>
           {% endif %}
-        {% elif principal.is_guest %}
-          {# 游客：已注册未入队。给他"我的申请"这个落脚点，
-             否则登录后唯一能去的地方只有账号页，会以为系统坏了。 #}
-          <a href="/apply/status" class="{{ 'active' if current_path == '/apply/status' else '' }}">我的申请</a>
-          <a href="/apply" class="{{ 'active' if current_path == '/apply' else '' }}">入队申请</a>
+
+          {% if principal.is_guest %}
+            {# 游客：注册后能看各区块的列表与汇总，但还不能进详情页。
+               给他两个落脚点 —— 「入队申请」是下一步，「我的申请」是进度。 #}
+            <a href="/apply" class="{{ 'active' if current_path == '/apply' else '' }}">入队申请</a>
+            <a href="/apply/status" class="{{ 'active' if current_path == '/apply/status' else '' }}">我的申请</a>
+          {% endif %}
         {% else %}
-          {# 未登录访客：只有公开入口。**不要**给「我的申请」——
-             他还没有申请，点进去只会被送回登录页。 #}
-          <a href="/apply" class="{{ 'active' if current_path == '/apply' else '' }}">申请入队</a>
+          {# 未登录访客：只有公开入口。
+             ⚠️ 指向 **/register**（注册即成为游客，立刻能看到各区块列表），
+             不要指向 /apply —— 那个页面需要先登录，点进去只会被弹回登录页。 #}
+          <a href="/register" class="{{ 'active' if current_path == '/register' else '' }}">注册</a>
+          <a href="/login" class="{{ 'active' if current_path == '/login' else '' }}">登录</a>
         {% endif %}
       </nav>
 
@@ -76,7 +84,7 @@
           </form>
         {% else %}
           <a class="btn ghost" href="/login">登录</a>
-          <a class="btn" href="/apply">申请入队</a>
+          <a class="btn" href="/register">注册</a>
         {% endif %}
       </div>
     </div>

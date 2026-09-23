@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}注册 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="auth-wrap" style="max-width:640px">
+  <h1>注册账号</h1>
+
+  {% if error %}<div class="flash warn">{{ error }}</div>{% endif %}
+
+  <div class="panel">
+    <h2 style="margin-top:0">两步入队</h2>
+    <p class="small" style="margin-top:-4px">
+      联队采用<strong>「先注册，再申请」</strong>两步：
+    </p>
+    <table class="small">
+      <thead><tr><th style="width:130px">步骤</th><th>做什么</th><th>能看到什么</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>① 注册</strong>（本页）</td>
+          <td>设置用户名与密码，立刻得到一个<strong>游客</strong>账号</td>
+          <td>各区块的<strong>列表与汇总</strong>：成员名册（呼号/军衔/飞行时长等）、
+              战役、飞行记录、统计、资料目录</td>
+        </tr>
+        <tr>
+          <td><strong>② 提交入队申请</strong><br><span class="muted">登录后</span></td>
+          <td>填写呼号意向与飞行经历，等管理员审核</td>
+          <td>—</td>
+        </tr>
+        <tr>
+          <td><strong>③ 成为队员</strong><br><span class="muted">管理员提升</span></td>
+          <td>管理员把你的账号提升为队员</td>
+          <td>再加上<strong>详情页</strong>：任务详情、战役态势、ACMI 工作台、资料文件下载</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="small muted" style="margin:10px 0 0">
+      注册是<strong>公开的</strong>，不需要邀请。但账号本身<strong>没有任何操作权限</strong> ——
+      上传、编辑、删除都要等成为队员之后。
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:0">账号信息</h2>
+    <form method="post" action="/register">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="field" style="margin-bottom:14px">
+        <label for="username">用户名 <span class="muted">（必填，用于登录）</span></label>
+        <input type="text" id="username" name="username" required maxlength="64"
+               autofocus autocomplete="username"
+               value="{{ form.username if form else '' }}">
+        <span class="hint">不能含空格。可以就用你的呼号。</span>
+      </div>
+
+      <div class="field" style="margin-bottom:14px">
+        <label for="email">邮箱 <span class="muted">（可选，只用于联系）</span></label>
+        <input type="text" id="email" name="email" maxlength="254"
+               value="{{ form.email if form else '' }}">
+      </div>
+
+      <div class="field" style="margin-bottom:14px">
+        <label for="password">密码 <span class="muted">（必填）</span></label>
+        <input type="password" id="password" name="password" required
+               autocomplete="new-password">
+      </div>
+
+      <div class="field" style="margin-bottom:6px">
+        <label for="confirm_password">再输一次密码 <span class="muted">（必填）</span></label>
+        <input type="password" id="confirm_password" name="confirm_password" required
+               autocomplete="new-password">
+        <span class="hint">
+          密码是单向加密保存的，<strong>找不回来</strong>。忘了只能由管理员重置。
+          至少 {{ min_password }} 位，别用常见弱口令。
+        </span>
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit">注册并登录</button>
+        <a class="btn ghost" href="/login">已有账号，去登录</a>
+      </div>
+    </form>
+  </div>
+
+  <p class="muted small" style="text-align:center">
+    同一个网络每天最多注册 {{ max_per_day }} 个账号（防批量注册）。<br>
+    联队集体入队请联系管理员。
+  </p>
+</div>
+{% endblock %}

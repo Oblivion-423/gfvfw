@@ -291,6 +291,62 @@ def main() -> int:
                     check("%s 可访问且正文不含工作台" % path,
                           r.status_code == 200 and "acmiWorkbench" not in r.text,
                           "status=%d" % r.status_code)
+
+            print("\n[9] 导航按身份分档（未登录 / 游客 / 队员）")
+            # 联队口径：**列表/汇总页对游客开放，详情页与写操作仅队员**。
+            # 所以五个业务区块对"已登录"一律显示 —— 菜单里藏起来会让游客
+            # 以为系统是空的；限制由详情页的 403 说明页解释。
+            with TestClient(app) as anon:
+                nav = nav_block(anon.get("/").text)
+                check("★ 未登录：导航有「注册」", "/register" in nav, nav[:200])
+                check("★ 未登录：导航有「登录」", "/login" in nav)
+                check("★ 未登录：导航**没有**业务区块（成员/飞行记录/统计/资料）",
+                      not any(k in nav for k in ("/members", "/log/campaign",
+                                                 "/stats", "/library")))
+                # ⚠️ 未登录访客以前指向 /apply，而 /apply 现在需要登录 ——
+                #    点进去只会被弹回登录页。必须指向 /register。
+                check("★ 未登录：导航不指向 /apply（那个页面需要先登录）",
+                      'href="/apply"' not in nav)
+
+            with TestSession() as db:
+                db.add(User(username="guestnav",
+                            password_hash=hash_password("password123"),
+                            status="pending", member_id=None))
+                db.commit()
+            with TestClient(app) as client:
+                login(client, "guestnav")
+                home = client.get("/").text
+                nav = nav_block(home)
+                check("★ 游客：导航有五个业务区块（列表页对他开放）",
+                      all(k in nav for k in ("/members", "/theater",
+                                             "/log/campaign", "/stats",
+                                             "/library")), nav[:300])
+                check("★ 游客：导航有「入队申请」", 'href="/apply"' in nav)
+                check("★ 游客：导航有「我的申请」", "/apply/status" in nav)
+                check("★ 游客：导航**没有**「入队审批」", "/applications" not in nav)
+                check("★ 游客：身份标签显示「游客」", ">游客<" in home)
+                check("★ 游客：导航**没有** /register（他已注册）",
+                      "/register" not in nav)
+
+            print("\n[10] 列表页对游客可见，但写操作 UI 必须消失")
+            # ⚠️ 这是本档身份最容易漏的一条：/log/campaign 与 /log/training
+            #    既是对游客开放的列表页，又内嵌了 ACMI 写操作工作台。
+            #    模板若忘了按身份挡住工作台，页面能打开，但游客会看到
+            #    "上传 ACMI" 的表单 —— 点了必然 403，属可见的误导。
+            with TestClient(app) as client:
+                login(client, "guestnav")
+                for path in ("/log/campaign", "/log/training"):
+                    r = client.get(path, follow_redirects=False)
+                    check("游客可打开列表页 %s" % path, r.status_code == 200,
+                          "status=%d" % r.status_code)
+                    check("★ 但 %s 里没有 ACMI 工作台" % path,
+                          "acmiWorkbench" not in r.text)
+                    check("★ 但 %s 里没有上传表单" % path,
+                          "/acmi/upload" not in r.text)
+                # 详情页仍然是仅队员
+                r = client.get("/theater/%s" % cid, follow_redirects=False)
+                check("★ 游客打开战役详情 → 403（详情仅队员）",
+                      r.status_code == 403, "status=%d" % r.status_code)
         finally:
             import gfvfw.db as _d
             import gfvfw.web.deps as _p

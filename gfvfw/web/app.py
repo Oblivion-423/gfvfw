@@ -102,10 +102,13 @@ def create_app() -> FastAPI:
 
         游客已经登录了，重定向会造成「点→回登录→再点」的死循环，
         而且他看不出差的是"被提升为队员"这一步。
+
+        ⚠️ 文案不要写成 Markdown（``**队员**``）—— 这个字符串是直接
+        插进 HTML 的，星号会原样显示出来。加粗交给模板里的标签。
         """
         return render(request, "error.html", {
             "code": 403,
-            "message": "这部分内容仅限**队员**查看。你目前是游客。",
+            "message": "这部分内容（详情页 / 写操作）仅限队员。你目前是游客。",
             "member_required": True,
         }, status_code=403)
 

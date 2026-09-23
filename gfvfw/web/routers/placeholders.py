@@ -6,12 +6,16 @@
 
 可见性
 ------
-``/library`` 是**仅限队内**的内容（联队要求"队员可查看仅限队内的资料"），
-所以用 :func:`require_member` 守卫：游客会看到"需要队员身份"的说明页，
+``/library`` 是**列表页**，按"只开列表，不开详情"的口径用
+:func:`require_login` 守卫：**游客也能看资料目录**（有哪些资料、多少份），
 未登录访客会被送到登录页。
 
+但**下载/上传**仍然仅队员：本页只给目录与数量，真正的文件下载入口
+（将来实现）必须是 ``require_member``，否则"公开部分"就变成了
+"公开全部资料"。这也是为什么这里没有任何下载链接。
+
 将来真正实现时，``Document.visibility``（``public`` / ``members`` / ``command``）
-要在这里落地 —— 公开文档可以让游客也看到，但那需要一个公开的资料列表页，
+要在这里落地 —— 公开文档可以让游客下载，但那需要按 ``visibility`` 逐条判断，
 而不是把整页开放。
 
 「战役管理」原先也是占位页，现已由 :mod:`gfvfw.web.routers.theater`
@@ -24,7 +28,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..deps import Principal, get_db, require_member
+from ..deps import Principal, get_db, require_login
 from ..templating import render
 
 router = APIRouter()
@@ -32,11 +36,11 @@ router = APIRouter()
 
 @router.get("/library")
 def library(request: Request,
-            principal: Principal = Depends(require_member),
+            principal: Principal = Depends(require_login),
             db: Session = Depends(get_db)):
     """资料查询 —— 计划用于手册/检查单/地图等资料的检索（尚未实现）。
 
-    ⚠️ 仅限队员。
+    列表/目录对游客开放，下载与上传仅队员（见模块 docstring）。
     """
     from ...models import Document
 
