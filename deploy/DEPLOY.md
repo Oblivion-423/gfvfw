@@ -122,6 +122,38 @@ WantedBy=multi-user.target
 | 端口 | 80/443 开放 | 证书校验与 HTTPS |
 | 服务器时间 | **UTC** | 存储一律 UTC，展示层统一转 UTC+8（需求 §7.3） |
 
+### 0.1 上线前先确认 DNS 与两层"防火墙"
+
+**证书签不下来的头号原因就是这两件事**，先花两分钟确认，能省掉后面反复排查。
+
+**① DNS：域名必须解析到这台机器的公网 IP**
+
+```bash
+# ⚠️ 最小化安装常常**没有 dig**（报 '-bash: dig: command not found'）。
+#    用这两条替代，它们一定在：
+getent hosts gfvfw.top
+python3.11 -c "import socket; print('gfvfw.top ->', socket.gethostbyname('gfvfw.top'))"
+
+# 本机公网 IP（阿里云内网 metadata，不需外网即可取到）
+curl -sS http://100.100.100.200/latest/meta-data/eipv4; echo
+```
+
+两者必须是**同一个 IP**。不同 → 去域名服务商改 A 记录，等生效（几分钟到几小时）。
+（想要 `dig` 就 `dnf install -y bind-utils` / `apt install -y dnsutils`。）
+
+> ⚠️ **用了 Cloudflare 之类代理的话**：先把橙色云朵点成灰色（DNS only）。
+> 橙色代理会拦住 Caddy 的 TLS-ALPN-01 挑战，证书拿不到。
+
+**② 防火墙是两层的 —— 操作系统之外还有一层**
+
+| 层 | 怎么开 | 备注 |
+|---|---|---|
+| 云平台安全组 | **控制台** → ECS 实例 → 安全组 → 入方向 → 放行 **80 / 443** | ⚠️ **阿里云/腾讯云/AWS 都是这样，在系统之外，`firewall-cmd` 管不到** |
+| 系统防火墙 | Debian 系通常没跑；RHEL 系若有 `firewalld`：<br>`firewall-cmd --permanent --add-service=http --permanent --add-service=https && firewall-cmd --reload` | 先 `systemctl is-active firewalld` 看有没有 |
+
+**只开一层**的典型症状：服务器上 `curl 127.0.0.1:8000` 完全正常，
+但外网 `https://你的域名` 打不开、Caddy 日志里证书申请反复失败。
+
 ### 实测资源占用（真实文件，非估算）
 
 | 文件 | 体积 | 对象数 | 解析耗时 |
