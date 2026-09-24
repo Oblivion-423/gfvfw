@@ -9,12 +9,18 @@
   （含角色、档案可见性、Logbook 归档与管理入口）
 * 增删改：``MEMBER_CREATE`` / ``MEMBER_EDIT`` / ``MEMBER_DELETE``
 * 军衔变更：``MEMBER_EDIT_RANK``（敏感，单独一个权限点）
+* 账号解绑 ``POST /members/{id}/unbind``：``MEMBER_DELETE``
+  —— 拆开"登录账号"与"名册成员"的绑定，账号降为游客（详见函数 docstring）
+* 作废 / 恢复 ``POST /members/{id}/delete|restore``：``MEMBER_DELETE``
+  —— 软删除；作废时**同时停用绑定的登录账号**（否则删了成员却没删掉访问权）
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -24,12 +30,14 @@ from sqlalchemy.orm import Session
 from ...db import utcnow
 from ...models import (
     Member, MemberQualification, MemberRole, Mission, Qualification, Rank,
-    Role, Sortie,
+    Role, Sortie, User,
 )
+from ...models.identity import USER_STATUS_LABELS
 from ...permissions import (
     LOGBOOK_UPLOAD_ANY, MEMBER_CREATE, MEMBER_DELETE, MEMBER_EDIT,
     MEMBER_EDIT_RANK,
 )
+from ...security import verify_csrf
 from ...services import logbook as LB
 from ...services.audit import record_audit
 from ...services.naming import callsign_owner
@@ -37,6 +45,8 @@ from ..deps import (
     Principal, get_db, require, require_login, require_member,
 )
 from ..templating import render
+
+log = logging.getLogger("gfvfw.web.members")
 
 router = APIRouter(prefix="/members")
 
@@ -51,6 +61,14 @@ STATUS_BADGE = {
     "reserve": "warn",
     "retired": "",
     "probation": "accent",
+}
+
+#: **登录账号**状态的徽章色（与上面的名册状态无关）。
+#: ``active``=队员可登录；``pending``=游客；``suspended``=已停用、不允许登录。
+ACCOUNT_STATUS_BADGE = {
+    "active": "ok",
+    "pending": "warn",
+    "suspended": "danger",
 }
 VISIBILITY_LABELS = {
     "public": "公开（任何人可见）",
@@ -83,6 +101,10 @@ def _common_context() -> dict:
         "confidence_labels": CONFIDENCE_LABELS,
         "confidence_badge": CONFIDENCE_BADGE,
         "source_labels": SOURCE_LABELS,
+        # 登录账号状态（与名册状态是两码事：一个账号可以是 active 而名册成员
+        # 状态是 reserve，反之亦然）
+        "account_status_labels": USER_STATUS_LABELS,
+        "account_status_badge": ACCOUNT_STATUS_BADGE,
     }
 
 
@@ -104,10 +126,18 @@ def _parse_date(value: Optional[str]) -> Optional[datetime]:
 def member_list(request: Request,
                 q: str = "",
                 status: str = "",
+                deleted: str = "",
                 principal: Principal = Depends(require_login),
                 db: Session = Depends(get_db)):
+    """名册列表。
 
-    stmt = select(Member).where(Member.deleted_at.is_(None))
+    ``?deleted=1`` 显示**已作废**的成员（只给有 MEMBER_DELETE 的人看）——
+    没有这个视图的话，"作废"在界面上就是不可逆的，而提示里写着"可恢复"。
+    """
+    show_deleted = deleted in ("1", "true", "yes") and principal.can(MEMBER_DELETE)
+
+    stmt = select(Member).where(
+        Member.deleted_at.is_not(None) if show_deleted else Member.deleted_at.is_(None))
     if q.strip():
         needle = "%%%s%%" % q.strip()
         # ⚠️ 只按呼号搜。队号（service_number）已从界面移除，见 member_create 的说明；
@@ -143,7 +173,9 @@ def member_list(request: Request,
         "total": len(rows),
         "q": q,
         "status_filter": status,
+        "show_deleted": show_deleted,
         "can_manage": principal.can(MEMBER_CREATE),
+        "can_delete": principal.can(MEMBER_DELETE),
     })
 
 
@@ -248,6 +280,10 @@ def member_detail(member_id: str, request: Request,
         "qualifications": qualifications,
         "roles": list(role_codes),
         "can_manage": principal.can(MEMBER_EDIT),
+        # 登录账号（本页要显示它，并给出「解绑」入口）
+        "account": _bound_account(db, member.id),
+        # 作废/解绑是同一个权限点（都能撤掉一个人的访问权）
+        "can_delete": principal.can(MEMBER_DELETE),
         # Logbook 归档（本页只显示摘要 + 入口，完整操作在专用页面）
         "logbook_count": len(LB.list_for_member(db, member.id)),
         "logbook_applied": LB.applied_for_member(db, member.id) is not None,
@@ -433,7 +469,136 @@ def member_update(member_id: str, request: Request,
 
 
 # --------------------------------------------------------------------------
-# 软删除
+# 账号绑定：解绑 / 查看
+# --------------------------------------------------------------------------
+
+def _bound_account(db: Session, member_id: str):
+    """该成员当前绑定的登录账号（没有则 ``None``）。
+
+    ⚠️ 一对一：一个成员最多一个账号。数据库层面靠 ``users.member_id`` 上的
+       唯一约束保证（``member_id`` 可空但非空时唯一）。
+    """
+    return db.scalar(select(User).where(User.member_id == member_id).limit(1))
+
+
+def _owner_lockout(db: Session, member: Member, account: Optional[User]) -> Optional[str]:
+    """这次操作会不会让系统**一个能用的 owner 都不剩**？是就返回可读原因。
+
+    这不是权限判定，是**防止不可逆的运维事故**：把最后一个 owner 删掉或解绑之后，
+    界面上再没有任何人能授权（连"提升别人"都做不到），只能上服务器用
+    ``gfvfw.cli grant-role`` 救回来。
+
+    只在目标**确实是一个能用的 owner**时才拦 —— 判定条件是
+    「挂着未撤销的 owner 角色」**且**「绑着一个 status=active 的账号」。
+    光有 owner 角色但没有账号（或账号已停用）的成员，删掉它不会让任何人失去
+    登录能力，不该被拦。
+    """
+    if account is None or account.status != "active":
+        return None
+    owner = db.scalar(select(Role).where(Role.code == "owner"))
+    if owner is None:
+        return None
+    holds = db.scalar(
+        select(MemberRole.id)
+        .where(MemberRole.member_id == member.id,
+               MemberRole.role_id == owner.id,
+               MemberRole.revoked_at.is_(None))
+        .limit(1))
+    if holds is None:
+        return None
+
+    others = db.scalar(
+        select(func.count(func.distinct(MemberRole.member_id)))
+        .select_from(MemberRole)
+        .join(Member, Member.id == MemberRole.member_id)
+        .join(User, User.member_id == Member.id)
+        .where(MemberRole.role_id == owner.id,
+               MemberRole.revoked_at.is_(None),
+               Member.id != member.id,
+               Member.deleted_at.is_(None),
+               User.status == "active"))
+    if others:
+        return None
+    return ("「%s」是最后一个**能登录的 owner** —— 动它之后界面上再没有人能授权"
+            "（只剩服务器上的 gfvfw.cli 可用）。请先给另一个账号授予 owner 角色。"
+            % member.callsign)
+
+
+@router.post("/{member_id}/unbind")
+def member_unbind_account(member_id: str, request: Request,
+                          csrf_token: str = Form(""),
+                          principal: Principal = Depends(require(MEMBER_DELETE)),
+                          db: Session = Depends(get_db)):
+    """把登录账号从名册成员上**解绑**。
+
+    为什么需要它：绑错了账号（把 A 的账号绑到了 B 上）、或者某个人不该再以
+    队员身份登录，都需要一条"只拆链接、不删任何数据"的路子。
+
+    解绑后的账号是**游客**（``status='pending'``）：仍能登录、仍能看各区块的
+    列表与汇总，但**不再有任何队内权限**。为什么不保留 ``active``：
+
+    * ``Principal.is_member`` 只看 ``users.status``，不看有没有成员行 ——
+      留着 ``active`` 的话，这个账号在 ``require_member`` 眼里**仍然是队员**，
+      能进所有详情页，只是恰好没权限点。那是个自相矛盾的半成品状态；
+    * ``load_principal`` 还有一条"已激活但没角色 → 兜底给 member"的逻辑
+      （防止"激活了却什么都看不到"）。不改成 pending 的话，解绑反而会
+      **给它 member 的全部权限** —— 解绑等于没解。
+
+    ⚠️ **不动该成员的角色分配**。角色属于**名册成员**（``member_roles``
+    挂在 ``member_id`` 上），是这个人的队内身份，不是某个登录账号的属性。
+    所以：绑错账号 → 解绑 → 再绑正确的账号，指挥官权限会正确地跟着成员回来；
+    反之，如果解绑就把角色清掉，一次误操作就得重新授一遍权。
+    """
+    verify_csrf(request, csrf_token)
+
+    member = db.get(Member, member_id)
+    if member is None or member.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="成员不存在")
+
+    account = _bound_account(db, member.id)
+    if account is None:
+        raise HTTPException(
+            status_code=400,
+            detail="该成员没有绑定登录账号，无需解绑。")
+
+    # 自锁防护：解绑自己的账号 = 立刻把自己的权限全下掉（下一个请求就 403 了）
+    if principal.user is not None and account.id == principal.user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="不能用当前登录的账号给自己解绑 —— 那样你会立刻失去权限。"
+                   "请用另一个管理员账号操作，或先给别的账号授予 owner 角色。")
+    lockout = _owner_lockout(db, member, account)
+    if lockout:
+        raise HTTPException(status_code=400, detail=lockout)
+
+    before = {"username": account.username, "status": account.status,
+              "member_id": account.member_id}
+    account.member_id = None
+    account.status = "pending"
+
+    record_audit(db, actor_user_id=principal.user.id,
+                 action="member.unbind", target_table="users",
+                 target_id=account.id,
+                 before=before,
+                 after={"username": account.username, "status": account.status,
+                        "member_id": None, "callsign": member.callsign},
+                 reason="把登录账号从名册成员上解绑（账号降为游客）",
+                 request=request)
+    db.commit()
+    log.info("解绑账号 %s ← 成员 %s（操作者 %s）",
+             account.username, member.callsign, principal.display_name)
+
+    return RedirectResponse(
+        "/members/%s?message=%s" % (
+            member.id,
+            quote("已把登录账号「%s」从该成员上解绑；"
+                  "该账号现在是游客（能登录，但没有队内权限）。"
+                  "成员的角色分配保持不变。" % account.username)),
+        status_code=303)
+
+
+# --------------------------------------------------------------------------
+# 软删除 / 恢复
 # --------------------------------------------------------------------------
 
 @router.post("/{member_id}/delete")
@@ -441,20 +606,87 @@ def member_delete(member_id: str, request: Request,
                   csrf_token: str = Form(""),
                   principal: Principal = Depends(require(MEMBER_DELETE)),
                   db: Session = Depends(get_db)):
-
-    from ...security import verify_csrf
+    """作废名册成员（软删除），**并停用其绑定的登录账号**。"""
     verify_csrf(request, csrf_token)
 
     member = db.get(Member, member_id)
     if member is None or member.deleted_at is not None:
         raise HTTPException(status_code=404, detail="成员不存在")
 
+    # 自我删除防护：别把最后一个 owner 自己删掉，那是不可逆的运维事故。
+    me = principal.member
+    if me is not None and me.id == member.id:
+        raise HTTPException(
+            status_code=400,
+            detail="不能作废你自己所在的成员记录 —— 请先用另一个管理员账号操作。")
+
+    account = _bound_account(db, member.id)
+    lockout = _owner_lockout(db, member, account)
+    if lockout:
+        raise HTTPException(status_code=400, detail=lockout)
+
+    # ⚠️ **必须同时处理绑定账号**。
+    #    只把 members 行标作废的话，那个人照样能登录、照样是队员
+    #    （deps.load_principal 的说明里写了这个曾经真实存在过的口子）。
+    #    这里是第二道：把账号停用（suspended ⇒ 不允许登录）。
+    account_before = None
+    if account is not None:
+        account_before = {"username": account.username, "status": account.status}
+        account.status = "suspended"
+
     # ✅ 强制软删除（R11）：标记作废，可恢复，不真删
     member.deleted_at = utcnow()
     record_audit(db, actor_user_id=principal.user.id, action="delete",
                  target_table="members", target_id=member.id,
-                 before={"callsign": member.callsign},
-                 reason="软删除成员", request=request)
+                 before={"callsign": member.callsign, "account": account_before},
+                 after={"deleted": True,
+                        "account_status": account.status if account else None},
+                 reason=("软删除成员（同时停用其登录账号）" if account is not None
+                         else "软删除成员（该成员没有登录账号）"),
+                 request=request)
+    db.commit()
+    log.info("作废成员 %s（账号 %s，操作者 %s）", member.callsign,
+             account.username if account else "无", principal.display_name)
+
+    msg = "已作废成员「%s」。记录仍在库里（不是真删）。" % member.callsign
+    if account is not None:
+        msg += "其登录账号「%s」已一并停用，无法再登录。" % account.username
+    return RedirectResponse("/members?message=" + quote(msg), status_code=303)
+
+
+@router.post("/{member_id}/restore")
+def member_restore(member_id: str, request: Request,
+                   csrf_token: str = Form(""),
+                   principal: Principal = Depends(require(MEMBER_DELETE)),
+                   db: Session = Depends(get_db)):
+    """恢复被作废的成员（并把它被停用的登录账号恢复为队员）。"""
+    verify_csrf(request, csrf_token)
+
+    member = db.get(Member, member_id)
+    if member is None:
+        raise HTTPException(status_code=404, detail="成员不存在")
+    if member.deleted_at is None:
+        raise HTTPException(status_code=400, detail="该成员没有被作废，无需恢复。")
+
+    account = _bound_account(db, member.id)
+    restored_account = None
+    if account is not None and account.status == "suspended":
+        # ⚠️ 只在**确实是停用**时恢复成 active，且动作在按钮文案里写明了。
+        #    被停用 + 还绑在成员上的账号，来源只有"作废成员"这一条
+        #    （拒绝申请停用的是还没绑定成员的游客账号）。
+        account.status = "active"
+        restored_account = account.username
+
+    member.deleted_at = None
+    record_audit(db, actor_user_id=principal.user.id, action="restore",
+                 target_table="members", target_id=member.id,
+                 after={"callsign": member.callsign,
+                        "account_reactivated": restored_account},
+                 reason="恢复被作废的成员", request=request)
     db.commit()
 
-    return RedirectResponse("/members?message=已作废该成员记录（可恢复）", status_code=303)
+    msg = "已恢复成员「%s」。" % member.callsign
+    if restored_account:
+        msg += "其登录账号「%s」已恢复为队员。" % restored_account
+    return RedirectResponse("/members/%s?message=%s"
+                            % (member.id, quote(msg)), status_code=303)

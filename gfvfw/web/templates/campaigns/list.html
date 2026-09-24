@@ -4,16 +4,37 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>战役</h1>
+    <h1>{% if show_deleted %}已作废的战役{% else %}战役{% endif %}</h1>
     <div class="sub">
       共 {{ campaigns|length }} 个
-      {% if unassigned %} · <span class="badge warn">{{ unassigned }} 个任务尚未归入战役</span>{% endif %}
+      {% if not show_deleted and unassigned %}
+        · <span class="badge warn">{{ unassigned }} 个任务尚未归入战役</span>
+      {% endif %}
     </div>
   </div>
-  {% if can_manage %}
-    <a class="btn" href="/campaigns/new">新建战役</a>
-  {% endif %}
+  <div class="row">
+    {% if can_manage %}
+      {% if show_deleted %}
+        <a class="btn ghost" href="/campaigns">← 返回战役列表</a>
+      {% else %}
+        <a class="btn ghost" href="/campaigns?deleted=1">显示已作废</a>
+        <a class="btn" href="/campaigns/new">新建战役</a>
+      {% endif %}
+    {% endif %}
+  </div>
 </div>
+
+{% if show_deleted %}
+<div class="flash warn">
+  这里列出的战役是<strong>已作废</strong>的 —— 它们不在战役列表里、也不计入任何汇总。
+  记录本身都还在（没有真删），点「恢复」即可放回列表。
+  <br><span class="small">
+    ⚠️ 恢复<strong>不会</strong>把作废时移出的任务自动归回来：作废时没有记录
+    那些任务原本属于谁，事后分不清哪些是本来就未归属的。恢复后请到战役详情页
+    用「归入任务」重新归入。
+  </span>
+</div>
+{% endif %}
 
 {% if campaigns %}
 <div class="panel" style="padding:0;overflow:hidden">
@@ -24,6 +45,7 @@
         <th class="num">任务</th><th class="num">架次</th>
         <th class="num">日志时长</th><th class="num">总航程</th>
         <th class="num">参战</th><th class="num">战损</th><th>可见性</th>
+        {% if show_deleted %}<th>操作</th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -45,6 +67,15 @@
         <td class="num">{{ row.pilots }}</td>
         <td class="num">{{ row.deaths }}</td>
         <td class="small muted">{{ visibility_labels.get(c.visibility, c.visibility) }}</td>
+        {% if show_deleted %}
+        <td>
+          <form method="post" action="/campaigns/{{ c.id }}/restore"
+                onsubmit="return confirm('恢复战役「{{ c.name }}」？任务不会自动归回，需要你之后手动归入。')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn" type="submit">恢复</button>
+          </form>
+        </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -52,12 +83,16 @@
 </div>
 {% else %}
 <div class="empty">
-  还没有战役。
-  {% if can_manage %}
-    <br><br><a class="btn" href="/campaigns/new">新建第一个战役</a>
-    <br><span class="small">战役是可选的 —— 日常训练不归入战役也能正常记录。</span>
+  {% if show_deleted %}
+    没有被作废的战役。
   {% else %}
-    <br><span class="small">战役用于把多次任务组织成一个阶段性的作战行动。</span>
+    还没有战役。
+    {% if can_manage %}
+      <br><br><a class="btn" href="/campaigns/new">新建第一个战役</a>
+      <br><span class="small">战役是可选的 —— 日常训练不归入战役也能正常记录。</span>
+    {% else %}
+      <br><span class="small">战役用于把多次任务组织成一个阶段性的作战行动。</span>
+    {% endif %}
   {% endif %}
 </div>
 {% endif %}

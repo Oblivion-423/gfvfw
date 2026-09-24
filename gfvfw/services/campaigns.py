@@ -20,7 +20,22 @@ from .stats import METERS_PER_NM
 
 def list_campaigns(db: Session, include_finished: bool = True) -> list[dict]:
     """战役列表，含汇总（一次查询取回，避免 N+1）。"""
-    stmt = select(Campaign).where(Campaign.deleted_at.is_(None))
+    return _list(db, include_finished=include_finished, deleted=False)
+
+
+def list_deleted_campaigns(db: Session) -> list[dict]:
+    """**已作废**的战役列表（同一个汇总口径）。
+
+    与 :func:`list_campaigns` 唯一差别就是 ``deleted_at`` 的方向：
+    前者只列活的，这个只列作废的 —— 供"恢复"用。
+    没有这条路的话，"作废"在界面上就是不可逆的，而提示里写着"可恢复"。
+    """
+    return _list(db, include_finished=True, deleted=True)
+
+
+def _list(db: Session, *, include_finished: bool, deleted: bool) -> list[dict]:
+    stmt = select(Campaign).where(
+        Campaign.deleted_at.is_not(None) if deleted else Campaign.deleted_at.is_(None))
     if not include_finished:
         stmt = stmt.where(Campaign.status != "finished")
     stmt = stmt.order_by(Campaign.sort_order, Campaign.started_at.desc())

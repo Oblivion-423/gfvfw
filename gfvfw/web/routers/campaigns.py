@@ -1,32 +1,38 @@
 """
 战役管理路由。
 
-``/campaigns``                    列表
+``/campaigns``                    列表（``?deleted=1`` 显示已作废的）
 ``/campaigns/new``                新建
 ``/campaigns/{id}``               详情（含任务列表、参战成员、机型分布）
 ``/campaigns/{id}/edit``          编辑
-``/campaigns/{id}/delete``        软删除
+``/campaigns/{id}/delete``        软删除（任务移出，存档保留）
+``/campaigns/{id}/restore``       恢复（任务**不会**自动归回）
 ``/campaigns/{id}/assign``        把未归属的任务加入本战役
 ``/missions/{id}/campaign``       把单个任务归入/移出战役
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+import logging
+from datetime import date, datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...db import utcnow
-from ...models import Campaign, Mission
+from ...models import Campaign, CampaignSave, Mission
 from ...permissions import CAMPAIGN_MANAGE
+from ...security import verify_csrf
 from ...services import campaigns as CS
 from ...services.audit import record_audit
 from ..deps import Principal, get_db, require, require_login, require_member
 from ..templating import render
+
+log = logging.getLogger("gfvfw.web.campaigns")
 
 router = APIRouter(prefix="/campaigns")
 
@@ -72,11 +78,20 @@ def _fmt_day(dt: Optional[datetime]) -> str:
 
 @router.get("")
 def campaign_list(request: Request,
+                  deleted: str = "",
                   principal: Principal = Depends(require_login),
                   db: Session = Depends(get_db)):
+    """战役列表。
+
+    ``?deleted=1`` 显示**已作废**的战役（只给有管理权限的人看）——
+    没有这个视图的话，"作废"就是一条没有回头路的操作，而页面上却写着"可恢复"。
+    """
+    show_deleted = deleted in ("1", "true", "yes") and principal.can(CAMPAIGN_MANAGE)
     return render(request, "campaigns/list.html", {
         **_ctx(),
-        "campaigns": CS.list_campaigns(db),
+        "campaigns": (CS.list_deleted_campaigns(db) if show_deleted
+                      else CS.list_campaigns(db)),
+        "show_deleted": show_deleted,
         "can_manage": principal.can(CAMPAIGN_MANAGE),
         "unassigned": len(CS.unassigned_missions(db)),
     })
@@ -248,27 +263,90 @@ def campaign_delete(campaign_id: str, request: Request,
                     csrf_token: str = Form(""),
                     principal: Principal = Depends(require(CAMPAIGN_MANAGE)),
                     db: Session = Depends(get_db)):
-    from ...security import verify_csrf
     verify_csrf(request, csrf_token)
 
     c = db.get(Campaign, campaign_id)
     if c is None or c.deleted_at is not None:
         raise HTTPException(status_code=404, detail="战役不存在")
 
-    # ✅ 软删除（R11）；同时把任务移出战役，避免任务指向已作废战役
-    detached = db.scalar(
-        select(Mission).where(Mission.campaign_id == c.id).limit(1)) is not None
-    db.query(Mission).filter(Mission.campaign_id == c.id).update(
-        {Mission.campaign_id: None}, synchronize_session=False)
+    # 先把"会受影响的量"数出来，写进审计与提示 —— 用户点删除前应该知道
+    # 这一下动了多少东西，事后也才说得清当时是什么状态。
+    n_missions = db.scalar(
+        select(func.count()).select_from(Mission)
+        .where(Mission.campaign_id == c.id)) or 0
+    n_saves = db.scalar(
+        select(func.count()).select_from(CampaignSave)
+        .where(CampaignSave.campaign_id == c.id)) or 0
 
-    c.deleted_at = utcnow()
-    record_audit(db, actor_user_id=principal.user.id, action="delete",
+    # ✅ 软删除（R11）；同时把任务移出战役，避免任务指向已作废战役
+    try:
+        db.query(Mission).filter(Mission.campaign_id == c.id).update(
+            {Mission.campaign_id: None}, synchronize_session=False)
+
+        c.deleted_at = utcnow()
+        record_audit(db, actor_user_id=principal.user.id, action="delete",
+                     target_table="campaigns", target_id=c.id,
+                     before={"name": c.name, "theater": c.theater,
+                             "missions": n_missions, "saves": n_saves},
+                     after={"deleted": True, "missions_detached": n_missions},
+                     reason="软删除战役（任务已移出；战役存档仍保留）",
+                     request=request)
+        db.commit()
+    except Exception as exc:                            # noqa: BLE001
+        # ⚠️ 先回滚再对外说话：不滚的话会话会留在 PendingRollback，
+        #    后面任何查询都会抛 PendingRollbackError 把真因盖掉
+        #    （这条是 .cam 上传 500 事件里学到的）。
+        db.rollback()
+        log.exception("作废战役失败 id=%s", campaign_id)
+        raise HTTPException(status_code=500,
+                            detail="作废战役失败：%s" % exc) from exc
+
+    detail = ""
+    if n_missions:
+        detail += "，%d 个任务已移出为未归属" % n_missions
+    if n_saves:
+        detail += "，%d 份战役存档仍保留在该战役下" % n_saves
+    return RedirectResponse(
+        "/campaigns?message=" + quote(
+            "已作废战役「%s」%s。记录仍在库里（不是真删），可在列表页「显示已作废」里恢复。"
+            % (c.name, detail)),
+        status_code=303)
+
+
+@router.post("/{campaign_id}/restore")
+def campaign_restore(campaign_id: str, request: Request,
+                     csrf_token: str = Form(""),
+                     principal: Principal = Depends(require(CAMPAIGN_MANAGE)),
+                     db: Session = Depends(get_db)):
+    """恢复被作废的战役。
+
+    ⚠️ **不把任务自动归回来**。作废时任务被移出（``campaign_id=None``），
+    但没有记录它们原本属于这个战役 —— 谁在这一段时间里被归到了别的战役、
+    或者本来就是未归属的，事后分不清。所以恢复是"把战役放回列表"，
+    要归回任务请在战役详情页用「归入任务」逐个（或批量）做。
+    宁可让用户多点一次，也不要凭猜测挪数据。
+    """
+    verify_csrf(request, csrf_token)
+
+    c = db.get(Campaign, campaign_id)
+    if c is None:
+        raise HTTPException(status_code=404, detail="战役不存在")
+    if c.deleted_at is None:
+        raise HTTPException(status_code=400, detail="该战役没有被作废，无需恢复。")
+
+    c.deleted_at = None
+    record_audit(db, actor_user_id=principal.user.id, action="restore",
                  target_table="campaigns", target_id=c.id,
-                 before={"name": c.name}, reason="软删除战役（任务已移出）",
+                 after={"name": c.name},
+                 reason="恢复被作废的战役（任务不会自动归回）",
                  request=request)
     db.commit()
+
     return RedirectResponse(
-        "/campaigns?message=已作废该战役，其任务已移出为未归属状态", status_code=303)
+        "/campaigns/%s?message=%s" % (
+            c.id, quote("已恢复战役「%s」。作废时移出的任务需要你在本页用"
+                        "「归入任务」重新归入。" % c.name)),
+        status_code=303)
 
 
 # --------------------------------------------------------------------------

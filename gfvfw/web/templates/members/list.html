@@ -4,19 +4,37 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>成员名册</h1>
+    <h1>{% if show_deleted %}已作废的成员{% else %}成员名册{% endif %}</h1>
     <div class="sub">
       共 {{ total }} 人
       {% if q %}· 筛选「{{ q }}」{% endif %}
       {% if status_filter %}· 状态「{{ status_labels.get(status_filter, status_filter) }}」{% endif %}
     </div>
   </div>
-  {% if can_manage %}
-    <a class="btn" href="/members/new">新增成员</a>
-  {% endif %}
+  <div class="row">
+    {% if can_delete %}
+      {% if show_deleted %}
+        <a class="btn ghost" href="/members">← 返回名册</a>
+      {% else %}
+        <a class="btn ghost" href="/members?deleted=1">显示已作废</a>
+      {% endif %}
+    {% endif %}
+    {% if can_manage %}
+      <a class="btn" href="/members/new">新增成员</a>
+    {% endif %}
+  </div>
 </div>
 
+{% if show_deleted %}
+<div class="flash warn">
+  这里列出的是<strong>已作废</strong>的成员 —— 他们不在名册里、不计入任何统计，
+  其登录账号在作废时已被停用。记录本身都还在（没有真删），点「恢复」即可放回名册
+  （被停用的账号会一并恢复为队员）。
+</div>
+{% endif %}
+
 <form method="get" action="/members" class="panel tight">
+  {% if show_deleted %}<input type="hidden" name="deleted" value="1">{% endif %}
   <div class="row">
     <div class="field" style="min-width:220px">
       <label for="q">搜索呼号 / 队号</label>
@@ -34,7 +52,7 @@
     <div class="spacer"></div>
     <div class="row" style="align-self:flex-end">
       <button class="btn" type="submit">筛选</button>
-      <a class="btn ghost" href="/members">重置</a>
+      <a class="btn ghost" href="/members{{ '?deleted=1' if show_deleted else '' }}">重置</a>
     </div>
   </div>
 </form>
@@ -51,6 +69,7 @@
         <th class="num">架次</th>
         <th class="num">日志时长</th>
         <th>入队日期</th>
+        {% if show_deleted %}<th>操作</th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -65,6 +84,15 @@
         <td class="num">{{ row.sortie_count }}</td>
         <td class="num">{{ row.flight_seconds|dur }}</td>
         <td class="muted small">{{ m.joined_at|date }}</td>
+        {% if show_deleted %}
+        <td>
+          <form method="post" action="/members/{{ m.id }}/restore"
+                onsubmit="return confirm('恢复成员「{{ m.callsign }}」？\n\n· 名册记录恢复显示\n· 若其登录账号在作废时被停用，会一并恢复为队员\n\n确定继续？')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn" type="submit">恢复</button>
+          </form>
+        </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>
@@ -72,7 +100,9 @@
 </div>
 {% else %}
 <div class="empty">
-  {% if q or status_filter %}
+  {% if show_deleted %}
+    没有被作废的成员。
+  {% elif q or status_filter %}
     没有符合条件的成员。
   {% else %}
     名册还是空的。
@@ -85,7 +115,7 @@
 </div>
 {% endif %}
 
-{% if not principal.is_member %}
+{% if not show_deleted and not principal.is_member %}
 {# 游客：名册列表开放（联队要求公开呼号/军衔/飞行时长），但点进详情会被拦。
    提前说清楚，避免让他以为页面坏了。 #}
 <div class="flash info">
@@ -95,7 +125,7 @@
 </div>
 {% endif %}
 
-{% if not can_manage %}
+{% if not can_manage and not show_deleted %}
 <p class="muted small">
   你当前的身份为「{{ principal.identity_label }}」，只能查看名册，无法新增或修改。
 </p>

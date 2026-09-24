@@ -189,6 +189,14 @@ def load_principal(db: Session, request: Request) -> Principal:
         return ANONYMOUS
 
     member = db.get(Member, user.member_id) if user.member_id else None
+    # ⚠️ **软删除的名册成员等于"没有这个成员"**。
+    #    这里曾经直接 `db.get(Member, user.member_id)`，不看 `deleted_at` ——
+    #    于是"删除成员"只把 members 行标了作废，而绑定它的账号照样
+    #    加载到那个成员、照样取到未撤销的角色 ⟹ **照样拥有全部权限**，
+    #    导航里还继续显示那个已被删掉的呼号。
+    #    删人却没删掉访问权，是最不该有的那种"看起来生效了"。
+    if member is not None and member.deleted_at is not None:
+        member = None
 
     is_active = user.status == ACTIVE_STATUS
 
@@ -210,7 +218,12 @@ def load_principal(db: Session, request: Request) -> Principal:
 
     # 未分配角色但账号已激活 → 兜底为最小角色 member，
     # 避免"已激活却什么都看不到"的荒谬状态。
-    if not role_codes and is_active:
+    #
+    # ⚠️ 但这个兜底**必须有名册成员才算数**：没有成员行的"已激活"账号
+    #    不是一个队员，它是**解绑后的账号**（见 /members/{id}/unbind）。
+    #    不加这个条件的话，把账号从成员上解绑、状态仍是 active，
+    #    它就会凭这条兜底拿到 member 的全部权限 —— 解绑等于没解。
+    if not role_codes and is_active and member is not None:
         role_codes = ["member"]
 
     # ⚠️ 白名单：只有 `active` 才有权限点。

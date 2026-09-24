@@ -104,6 +104,16 @@
         {% for r in roles %}<span class="badge accent">{{ r|role_name }}</span> {% endfor %}
       {% else %}—{% endif %}
     </dd>
+    <dt>登录账号</dt><dd>
+      {% if account %}
+        <code>{{ account.username }}</code>
+        <span class="badge {{ account_status_badge.get(account.status, '') }}">
+          {{ account_status_labels.get(account.status, account.status) }}</span>
+      {% else %}
+        <span class="muted">未绑定</span>
+        <span class="hint">—— 该成员还不能登录</span>
+      {% endif %}
+    </dd>
   </dl>
 
   {% if member.bio %}
@@ -111,6 +121,61 @@
     <p style="white-space:pre-wrap;margin:0">{{ member.bio }}</p>
   {% endif %}
 </div>
+
+{# ------------------------------------------------------------------ #}
+{# 账号绑定 + 危险操作                                                  #}
+{# ------------------------------------------------------------------ #}
+{% if can_delete %}
+<div class="panel tight">
+  <h2 style="margin-top:0">账号与危险操作</h2>
+
+  <h3 style="margin-top:4px">登录账号</h3>
+  {% if account %}
+    <p class="small" style="margin-top:0">
+      该成员绑定的登录账号是 <code>{{ account.username }}</code>
+      （{{ account_status_labels.get(account.status, account.status) }}）。
+    </p>
+    <form method="post" action="/members/{{ member.id }}/unbind"
+          onsubmit="return confirm('把账号「{{ account.username }}」从成员「{{ member.callsign }}」上解绑？\n\n· 账号会降为「游客」：仍能登录、仍能看列表与汇总，但不再有任何队内权限\n· 名册成员与所有历史数据（架次、Logbook）都不动\n· 该成员的角色分配也不动 —— 之后绑定别的账号会照常继承\n\n确定继续？')">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn" type="submit">解绑该账号</button>
+    </form>
+    <p class="small muted" style="margin:10px 0 0">
+      解绑后<strong>账号变成游客</strong>（不是删除）：还能登录、还能看各区块的
+      列表与汇总，但<strong>不再有任何队内权限</strong>，成员详情页也会被拦。
+      名册成员本身<strong>保留</strong>，只是暂时没有账号 —— 之后可以再到
+      <a href="/enroll">开队员账号</a>把这个呼号绑给别的账号。
+      <br>典型用途：绑错了账号（把 A 的账号绑到了 B 上），拆开重绑即可。
+      角色跟着<strong>成员</strong>走，所以重绑后人家的权限会自动回来。
+    </p>
+  {% else %}
+    <p class="small" style="margin-top:0">
+      该成员<strong>还没有绑定登录账号</strong>，所以没有可解绑的。
+      要给他开一个：<a href="/enroll">开队员账号</a> →
+      选「给名册里已有的成员开账号」，在下拉里选
+      <code>{{ member.callsign }}</code>。
+    </p>
+  {% endif %}
+
+  <h3>作废该成员</h3>
+  <form method="post" action="/members/{{ member.id }}/delete"
+        onsubmit="return confirm('作废成员「{{ member.callsign }}」？\n\n· 名册记录标记作废，名册与列表里不再显示（不是真删）\n· 其登录账号{{ '「' ~ account.username ~ '」会被一并停用，无法再登录' if account else '（该成员没有账号）' }}\n· 历史架次与 Logbook 归档都保留\n· 可在名册列表页「显示已作废」里恢复\n\n确定继续？')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="btn danger" type="submit">作废此成员</button>
+  </form>
+  <p class="small muted" style="margin:10px 0 0">
+    <strong>作废 ≠ 删除数据。</strong>名册记录仍在库里，只是从名册与列表里消失；
+    历史架次、Logbook 归档全部保留（它们按 <code>member_id</code> 关联，不受影响）。
+    {% if account %}
+      ⚠️ 其登录账号会<strong>一并停用</strong> —— 只作废名册行而不动账号的话，
+      那个人照样能登录、照样是队员（这个口子真实存在过，已修）。
+      如果你<strong>只想让他不能登录、但保留名册记录</strong>，请改用上面的「解绑该账号」。
+    {% endif %}
+    <br>恢复入口：<a href="/members?deleted=1">名册 → 显示已作废</a>
+    （恢复时其被停用的账号会一并恢复为队员）。
+  </p>
+</div>
+{% endif %}
 
 {# ------------------------------------------------------------------ #}
 {# 资质面板：**本轮暂时移除**（联队口径：资质与教官相关功能暂不需要）。

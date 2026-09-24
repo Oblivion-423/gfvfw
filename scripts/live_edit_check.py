@@ -268,6 +268,41 @@ def main() -> int:
     else:
         check("战役列表含战役链接", False, "未匹配到 /theater/<id>")
 
+    print("\n[8b] ★ 删战役 / 删成员 / 账号解绑的界面入口")
+    # 这三个功能都要求"入口看得见" —— 删成员的 handler 一度**完全没有任何
+    # 模板引用它**（写了却点不到），删战役则只藏在编辑页最下面。所以这里盯
+    # 的是**入口本身**，而不是 handler 存不存在。
+    status, html = s.get("/campaigns")
+    check("GET /campaigns 200", status == 200, f"status={status}")
+    plan_ids = re.findall(r"/campaigns/([0-9a-f-]{36})\"", html)
+    check("战役列表含「显示已作废」入口", "deleted=1" in html)
+    if plan_ids:
+        status, html = s.get(f"/campaigns/{plan_ids[0]}")
+        check("★ 战役**详情页**含「作废此战役」按钮",
+              "作废此战役" in html, "详情页没有删除入口 —— 用户会找不到")
+        check("战役详情页含恢复入口说明", "显示已作废" in html)
+    status, html = s.get("/campaigns?deleted=1")
+    check("GET /campaigns?deleted=1 200（已作废视图）", status == 200,
+          f"status={status}")
+
+    status, html = s.get("/members")
+    mem_ids = re.findall(r"/members/([0-9a-f-]{36})\"", html)
+    check("名册含「显示已作废」入口", "deleted=1" in html)
+    hit_unbind = hit_delete = False
+    for mid in mem_ids[:10]:
+        status, page = s.get(f"/members/{mid}")
+        if status != 200:
+            continue
+        hit_delete = hit_delete or ("作废此成员" in page)
+        hit_unbind = hit_unbind or ("解绑该账号" in page)
+    check("★ 成员详情页含「作废此成员」按钮", hit_delete,
+          "名册里没有任何成员页出现删除入口")
+    check("★ 成员详情页含「解绑该账号」按钮", hit_unbind,
+          "名册里没有任何成员页出现解绑入口（都被绑着账号才对）")
+    status, html = s.get("/members?deleted=1")
+    check("GET /members?deleted=1 200（已作废视图）", status == 200,
+          f"status={status}")
+
     print("\n[9] 服务端边界（构造应被拒绝的请求）")
     # 9a 无 CSRF 的删除请求 -> 403
     status, _ = s.post(f"/missions/{mid}/delete", {"reason": "probe"})

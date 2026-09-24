@@ -176,4 +176,27 @@
   </table>
 </div>
 {% endif %}
+
+{# ------------------------------------------------------------------ #}
+{# 危险操作：作废战役                                                    #}
+{# ⚠️ 这个按钮以前**只**出现在编辑页的最下面，详情页上完全没有 —— 用户找不到 #}
+{#    "删除战役"就是这个原因。现在放在详情页底部（危险操作应当与日常操作分开）。 #}
+{# ------------------------------------------------------------------ #}
+{% if can_manage %}
+<div class="panel tight">
+  <h2 style="margin-top:0">危险操作</h2>
+  <form method="post" action="/campaigns/{{ campaign.id }}/delete"
+        onsubmit="return confirm('作废战役「{{ campaign.name }}」？\n\n· 战役下 {{ totals.missions }} 个任务会被移出为「未归属」（任务与架次都不删）\n· 战役存档（.cam）仍保留在该战役下\n· 记录只是标记作废，可在列表页「显示已作废」里恢复\n\n确定继续？')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="btn danger" type="submit">作废此战役</button>
+  </form>
+  <p class="small muted" style="margin:10px 0 0">
+    <strong>作废 ≠ 删除数据。</strong>战役记录仍在库里，只是从列表里消失；
+    它下面的任务会被移出为<strong>未归属</strong>（任务与架次一条都不会删）。
+    <br>恢复入口：<a href="/campaigns?deleted=1">战役列表 → 显示已作废</a>。
+    ⚠️ 恢复<strong>不会</strong>把任务自动归回来 —— 作废时没有记录它们原本属于谁，
+    恢复后请在下方「归入任务」里重新归入。
+  </p>
+</div>
+{% endif %}
 {% endblock %}
