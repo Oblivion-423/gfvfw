@@ -529,13 +529,76 @@ du -sh /srv/gfvfw/bms-data
   「坐标越界 / entityType 解析失败」告警）。所以上传 `.cam` 后若页面空荡荡
   又满是告警，**先回来核对这一节**，别怀疑解析器。
 - ⚠️ 最后那个 `Theater.txt` 最容易漏：缺了它地图页算不出经纬度，而它只有几百字节。
-- **剧场底图不要拷**（四个剧场合计 1.6 GB）。缺底图只是地图页没背景图，
-  目标点与单位照画。要背景图就自压一张**正方形** PNG（边长 ≥1024、≥512 KB）
-  放进 `GFVFW_BMS_MAP_DIR`。
 - 支持多个剧场：再拷对应 Add-On 目录的 `Campaign/CampObjData.xml` 与
   `Campaign/strings.txt`（各约 1.7 MB），`TerrData/Objects/*.xml` 是共用的。
 - 这些是 BMS 发行包内的数据文件：从自己已授权的安装拷到自己的服务器自用没问题，
   **不要入库、不要对外分发**。
+
+### 5.1 剧场底图（态势图的背景图）
+
+态势图的背景图来自 BMS 自带的剧场全图。**整套不要拷**（四个剧场 1.6 GB，
+Hellas 16K 单张就 768 MB），但**每个剧场都有一张 4K 图，只有 7~14 MB** ——
+把那一张拷上去就够了，这是线上态势图**有没有底图**的分水岭。
+
+在开发机上一把梭（**推荐**）：
+
+```bash
+# 挑出每个剧场的 4K 图 → 按 <剧场名>.png 导出 → 打印 rsync 命令
+.venv/Scripts/python.exe scripts/collect_theater_maps.py \
+    --out var/maps --rsync gfvfw@你的VPS
+# Windows 上路径用反斜杠，或直接 .\.venv\Scripts\python.exe
+
+# 想更小就顺手降采样（纯标准库，4096² 要几十秒；7.4 MB → 约 1~2 MB）
+.venv/Scripts/python.exe scripts/collect_theater_maps.py \
+    --out var/maps --side 2048 --rsync gfvfw@你的VPS
+
+# 先干跑看一眼会挑哪几张、多大（不写任何文件）
+.venv/Scripts/python.exe scripts/collect_theater_maps.py
+```
+
+本机实测挑中的四张：
+
+| 剧场 | 文件 | 边长 | 体积 |
+|---|---|---|---|
+| Hellas | `HellasMap4K_Airports.png` | 4096² | 7.4 MB |
+| balkans | `Balkans Map 1_4K.png` | 4096² | 7.6 MB |
+| korea | `1_KTO_4k_Blank.png` | 4096² | 10.7 MB |
+| Israel | `ITO_Map_4K.png` | 4096² | 13.4 MB |
+
+> `Add-On Falklands` 里没有剧场全图（只有几张说明图），态势图对它没有背景图 ——
+> 这不是 Bug。换成 `--max-mb` 调大也无用，那个剧场确实没有。
+
+然后**在服务器上**：
+
+```bash
+sudo mkdir -p /srv/gfvfw/bms-data/maps
+# （用上面的 --rsync 推的话，这一步已经在开发机做完了）
+sudo chown -R gfvfw:gfvfw /srv/gfvfw/bms-data
+
+# 在 /etc/gfvfw/env 里加一行：
+#   GFVFW_BMS_MAP_DIR=/srv/gfvfw/bms-data/maps
+sudo systemctl restart gfvfw
+
+# 验证：应该列出刚才那几张
+sudo -u gfvfw ls -la /srv/gfvfw/bms-data/maps
+```
+
+几个要点：
+
+- ⚠️ **文件名里必须带剧场名**（`Hellas.png`、`korea.png`…）。程序用它把
+  "别人家的地图"挡掉；一个目录里混放多个剧场的图而名字又没有剧场名时，
+  Hellas 的战役可能会把 Korea 的地图当默认底图 —— 那比没有底图更误导。
+  页面上会列出被挡掉的文件。
+- **`GFVFW_BMS_MAP_DIR` 优先于 BMS 自带图**，所以放了自压小图就不会再去读
+  那些几百 MB 的原图。目录**只读即可**，不必加进 `ReadWritePaths`。
+- **不用重启也能换图**：图是按文件路径现读现发的（带 ETag + 一周缓存）。
+  但改了 `GFVFW_BMS_MAP_DIR` 这个环境变量必须重启。
+- **图必须是正方形**（边长 ≥ 1024）。战役网格是 1024×1024 的正方形，非正方形
+  的图没法一格对一格铺满 viewBox。BMS 里的停机坪图（`LGxx_PARKING_*.png`）
+  恰好是 3220×1173，会被拒 —— 页面上会写明"不是正方形 3220×1173"。
+- 找不到底图时，**态势图页面会自己说清楚**：列出现在用的是哪个
+  `GFVFW_BMS_MAP_DIR`、实际扫过哪些目录、每个目录里有多少可用，
+  以及"看着像地图但没用上"的文件和原因。照着那张表改就行。
 
 ---
 
@@ -1106,6 +1169,9 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 备份报 **`sqlite3.OperationalError: near "INTO": syntax error`** | 用了 `VACUUM INTO`，它要 SQLite **3.27+**，而 RHEL 8 系系统 SQLite 是 **3.26.0**。开发机（Windows + Python 3.10）自带 3.39，**本地测不出来** | 已改成 `sqlite3.Connection.backup()`（在线备份 API，3.6.11 起就有）。核对服务器实际版本：`/srv/gfvfw/.venv/bin/python -c "import sqlite3;print(sqlite3.sqlite_version)"` |
 | 上传 `.cam` 报 **Internal Server Error**（页面只有一行 500） | 两个问题叠加：① `.cam` 里**未初始化的实体槽位**是全 1 位模式，按 f32 读恰好是 **NaN**；SQLite 把 NaN 当 NULL，撞上 `campaign_units.z` 的 `NOT NULL` ⟹ `IntegrityError`。② 当时的失败处理**没有先回滚**就那这个脏会话去查战役列表 ⟹ `PendingRollbackError` 把真因盖掉，用户只看到 500 | 已修：所有浮点读取器与入库前兜底都把非有限值收敛成 `0.0`；所有 `except` 分支**先 `db.rollback()` 再渲染**，所以现在会显示「解析失败：`NOT NULL constraint failed: campaign_units.z`」这样的可读提示（HTTP 400）。日志里搜得到：`journalctl -u gfvfw \| grep campaign_units`。若仍出现 500，页面会给出**错误编号**，用 `journalctl -u gfvfw \| grep <错误编号>` 取完整堆栈 |
 | 上传 `.cam` 成功但页面**没有单位/目标点**，或出现「坐标越界」「entityType 解析失败」告警 | 服务器缺 **BMS 剧场数据**（`GFVFW_BMS_INSTALL_PATH` 指向的目录） | 见第 5 步。`.uni` 的单位流**靠类表路由**：类表缺失时所有记录都会退化成"当 Objective 解析"，流一旦错位就会读出垃圾记录（实测能读出 `unit_id=0xFFFF0001`、坐标 7103 这种不可能的值）。核对：`ls -la /srv/gfvfw/bms-data/ && du -sh /srv/gfvfw/bms-data/`，应有 47.9 MB 量级且**别漏 `Theater.txt`** |
+| 态势图**没有背景图**（只有目标点方框与单位符号） | 服务器上没有剧场底图 —— 这是**默认状态**（BMS 自带图整套 1.6 GB，部署时刻意不拷） | 见第 5.1 节：`scripts/collect_theater_maps.py --out var/maps --rsync …` 挑出每个剧场的 4K 图（7~14 MB），推到 `/srv/gfvfw/bms-data/maps`，再在 `/etc/gfvfw/env` 设 `GFVFW_BMS_MAP_DIR` 并重启。**页面上会自己列出**它扫过哪些目录、哪些文件"看着像地图但没用上"，照着改即可 |
+| 放了底图但态势图仍没背景图 | ① 图不是**正方形**或边长 < 1024；② 文件名里**没有剧场名**（多剧场混放时会被筛掉）；③ 改了 `GFVFW_BMS_MAP_DIR` 但**没重启**（环境变量只在启动时读） | 打开态势图页面看空状态里的诊断表 —— 它会写明"不是正方形 3220×1173"这类具体原因与被隐藏的文件名。改图本身不需要重启，改环境变量必须 `systemctl restart gfvfw` |
+| 态势图**盖错了剧场的地图** | 自备目录里同时放了多个剧场的图，而文件名都不含剧场名 | 把文件重命名成 `<剧场名>.png`（`Hellas.png`、`korea.png`…）。程序按文件名里的剧场名筛选；一个都匹配不上时才退回"整个目录都用" |
 | 想知道服务器上传链路到底行不行 | —— | 在开发机上跑 `scripts/cam_upload_probe.py http://你的域名 <密码> <某个.cam>`：真的走 HTTP 上传，只在出现服务器异常页时失败。⚠️ 它**会真的写一条存档记录**，先拿探针服务器试 |
 | 找不到"直接开队员账号"的入口 | 它是**故意**不进导航的隐藏页 | 直接访问 `/enroll`（需已登录且有 `application.review`）。见第 12 节「上线后怎么拉人入队」 |
 | 打开 `/enroll` 被弹到登录页 / 看到 403 | 链接**不是**凭证，权限才是 | 匿名会被送到登录页；游客与普通队员是 403（**这是正确行为**，不是 Bug）。用 owner 或指挥账号登录即可 |

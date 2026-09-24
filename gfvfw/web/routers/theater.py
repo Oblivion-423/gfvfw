@@ -23,11 +23,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ...campaign.coords import GRID_SIZE, Projection
-from ...campaign.maps import find_theater_maps, pick_default_map
+from ...campaign.maps import (
+    MAP_DIR_SETTING_HINT, discover_theater_maps, pick_default_map)
 from ...campaign.state import stance_name
 from ...config import settings
 from ...models.campaign_state import (
-    CampaignEvent, CampaignObjective, CampaignObjectiveChange, CampaignSave,
+    CampaignEvent, CampaignObjective, CampaignSave,
     CampaignTeamState, CampaignUnit,
 )
 from ...models.flight import Campaign
@@ -400,7 +401,8 @@ def theater_map(campaign_id: str, request: Request,
     # ── 剧场地图底图 ──────────────────────────────────────────────
     # 地图按**体积升序**列出，默认取最小的 4K 图：底图是页面首次加载的
     # 主要成本（Hellas 16K 有 768 MB），不该拿最大那张当默认值。
-    maps = _maps_for(sv)
+    map_disc = _maps_discovery(sv)
+    maps = map_disc.maps
     default_map = pick_default_map(maps)
     sel_map = None
     map_idx_param = request.query_params.get("map")
@@ -438,6 +440,9 @@ def theater_map(campaign_id: str, request: Request,
         "projection": tctx.get("projection"),
         "grid_center_latlon": tctx.get("grid_center_latlon"),
         "maps": maps,
+        "map_disc": map_disc,
+        "map_dir_setting": MAP_DIR_SETTING_HINT,
+        "map_dir_value": str(settings.bms_map_dir) if settings.bms_map_dir else None,
         "sel_map": sel_map,
         "sel_map_idx": sel_idx,
         "default_map": default_map,
@@ -488,7 +493,8 @@ def theater_map_image(campaign_id: str, idx: int, request: Request,
     只接受**列表下标**（服务端解析成实际文件），因此无法用它读任意路径 ——
     这是刻意的：地图文件在 BMS 安装目录里，不能让 URL 直接指文件系统。
     """
-    camp = _load_campaign(db, campaign_id)
+    # 战役不存在就 404（否则会拿着一个野 id 去解析地图下标）
+    _load_campaign(db, campaign_id)
     sv = _latest_or_404(db, campaign_id)
     maps = _maps_for(sv)
     if not maps:
@@ -558,12 +564,35 @@ def _theater_context(sv: CampaignSave) -> dict:
 
 def _maps_for(sv: CampaignSave) -> list:
     """该存档所在剧场可用的全图列表（体积升序，小图在前）。"""
+    return _maps_discovery(sv).maps
+
+
+def _maps_discovery(sv: CampaignSave):
+    """地图发现结果（含**搜索过程**，供页面自我诊断）。
+
+    ⚠️ 自备目录（``GFVFW_BMS_MAP_DIR``）**必须**在剧场数据缺失时也能用。
+        它曾经被写在 ``try`` 里面：只要 ``theater_data()`` 抛异常（服务器上
+        没配剧场数据就是这种情况），整个函数直接返回空列表 —— 连联队自己
+        放好的地图也一起丢掉。而"没配剧场数据"恰恰是最需要自备图的场景：
+        那种情况下 `_MAP_SUBDIRS` 一个都扫不到。
+        现在把两件事分开：剧场数据失败只记一条 problem，自备目录照扫。
+    """
     try:
         th = svc.theater_data(sv.theater or "", None)
         root = getattr(th, "root", None)
-        return find_theater_maps(root, settings.bms_map_dir, theater=sv.theater or "")
-    except Exception:  # noqa: BLE001
-        return []
+    except Exception as exc:  # noqa: BLE001
+        log.warning("读取剧场数据失败，只能依赖自备地图目录：%s", exc)
+        disc = discover_theater_maps(None, settings.bms_map_dir,
+                                     theater=sv.theater or "")
+        disc.problems.append("读取剧场数据失败（%s）—— 只能使用联队自备地图目录。"
+                             % exc)
+        return disc
+    disc = discover_theater_maps(root, settings.bms_map_dir,
+                                 theater=sv.theater or "")
+    if not disc.maps and not disc.custom_dir:
+        disc.problems.append(
+            "没有配置联队自备地图目录，而剧场数据目录里也没有可用底图。")
+    return disc
 
 
 def _latlon(proj, east, north) -> Optional[tuple[float, float]]:

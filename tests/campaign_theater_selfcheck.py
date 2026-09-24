@@ -1158,6 +1158,241 @@ def _reject_constant(name: str):
     raise ValueError("非法 JSON 常量：%s" % name)
 
 
+def _fake_png(path: Path, side: int, size_bytes: int) -> None:
+    """造一张"PNG 头正确、体积可控"的假图（只为验证发现逻辑，不解像素）。"""
+    head = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+            + struct.pack(">II", side, side))
+    path.write_bytes(head + b"\x00" * max(0, size_bytes - len(head)))
+
+
+def test_map_discovery() -> None:
+    """[7A] 剧场底图的发现、筛选与诊断。
+
+    底图是**"服务器上通常没有"**的东西（BMS 四个剧场的原图合计 1.6 GB），
+    所以"没有底图"是常见状态、不是异常 —— 这里主要测三件事：
+
+      A. 自备目录（``GFVFW_BMS_MAP_DIR``）**在没有剧场数据时也必须能用**。
+         它曾经被写在 ``try`` 里面：``theater_data()`` 一抛异常就整个返回空，
+         连联队自己放好的图也一起丢掉 —— 而"没配剧场数据"恰恰是最需要自备图
+         的场景。这条是线上态势图没底图的主要成因。
+      B. 一个目录里混放多个剧场的地图时，**不能张冠李戴**。
+      C. 体积下限不能把"文档让你自压的那张图"挡掉（曾经是 512 KB，
+         而压缩良好的 1024² 地图只有约 200 KB）。
+    """
+    print("\n[7A] 剧场底图发现")
+    from gfvfw.campaign.maps import (
+        MAP_DIR_SETTING_HINT, MIN_MAP_BYTES, MIN_MAP_SIDE,
+        discover_theater_maps, find_theater_maps, pick_default_map,
+        png_dimensions)
+
+    tmp = Path(tempfile.mkdtemp())
+
+    # ── A. 没有剧场数据 + 有自备目录 ────────────────────────────────
+    custom = tmp / "maps"
+    custom.mkdir()
+    _fake_png(custom / "Hellas.png", 4096, 3 * 1024 * 1024)
+    disc = discover_theater_maps(None, custom, theater="Hellas")
+    check("★ 没有剧场数据时，自备目录仍然被采纳（线上主要情形）",
+          len(disc.maps) == 1 and disc.maps[0].origin == "custom",
+          "得到 %d 张" % len(disc.maps))
+    check("自备图被标成 custom（页面上带 ★）",
+          disc.maps and disc.maps[0].origin == "custom")
+    check("自备目录被记进诊断信息",
+          any(s.directory == custom and s.exists for s in disc.scans))
+    check("没有剧场数据也不会崩", disc.theater_root is None)
+
+    # ── B. 多剧场混放 → 按名字筛 ───────────────────────────────────
+    _fake_png(custom / "korea.png", 4096, 4 * 1024 * 1024)
+    h = discover_theater_maps(None, custom, theater="Hellas")
+    k = discover_theater_maps(None, custom, theater="korea")
+    check("★ Hellas 只看到自己的图（不会拿错地图）",
+          [m.name for m in h.maps] == ["Hellas.png"],
+          str([m.name for m in h.maps]))
+    check("★ korea 只看到自己的图",
+          [m.name for m in k.maps] == ["korea.png"],
+          str([m.name for m in k.maps]))
+    check("被排掉的文件如实记下来（页面会列出来）",
+          list(h.filtered_out) == ["korea.png"], str(h.filtered_out))
+    check("大小写不敏感（Hellas.png 对 hellas 也认）",
+          len(discover_theater_maps(None, custom, theater="HELLAS").maps) == 1)
+    both = discover_theater_maps(None, custom, theater="")
+    check("剧场名未知时不做筛选（单剧场部署的兜底）", len(both.maps) == 2)
+
+    # ── C. 体积下限：文档让自压的图不能被挡掉 ──────────────────────
+    small = tmp / "small"
+    small.mkdir()
+    _fake_png(small / "Hellas.png", 1024, 200 * 1024)      # 约 200 KB
+    d = discover_theater_maps(None, small, theater="Hellas")
+    check("★ 200 KB 的 1024² 小图会被采纳（曾经被 512 KB 下限静默丢掉）",
+          len(d.maps) == 1, "得到 %d 张" % len(d.maps))
+    check("体积下限仍能挡住空壳文件", MIN_MAP_BYTES < 200 * 1024)
+
+    bad = tmp / "bad"
+    bad.mkdir()
+    _fake_png(bad / "square_too_small.png", 512, 900 * 1024)
+    (bad / "not_a_png.png").write_bytes(b"x" * (900 * 1024))
+    _fake_png(bad / "tall.png", 2048, 900 * 1024)
+    (bad / "tall.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + struct.pack(">II", 3220, 1173)
+        + b"\x00" * (900 * 1024))
+    _fake_png(bad / "tiny_file.png", 4096, 4096)
+    db_ = discover_theater_maps(None, bad, theater="Hellas")
+    check("全部不合格 → 一张都不给", not db_.maps)
+    reasons = {n: why for n, _d, _s, why in db_.near_misses}
+    check("非正方形被拒并说明尺寸", "不是正方形" in reasons.get("tall.png", ""),
+          str(reasons))
+    check("边长过小被拒", "边长" in reasons.get("square_too_small.png", ""),
+          str(reasons))
+    check("不是 PNG 被拒", "PNG" in reasons.get("not_a_png.png", ""), str(reasons))
+    check("小文件被拒", reasons.get("tiny_file.png"), str(reasons))
+    check("诊断里带得出目录名",
+          any(d == bad for _n, d, _s, _w in db_.near_misses))
+
+    # ── D. 找不到图时要能解释清楚 ──────────────────────────────────
+    empty = tmp / "empty"
+    empty.mkdir()
+    disc3 = discover_theater_maps(None, empty, theater="Hellas")
+    check("空目录 → 没有图", not disc3.maps)
+    check("空目录仍被记进 scans（页面才能说\"找过这里\"）",
+          any(s.directory == empty for s in disc3.scans))
+    scratch = discover_theater_maps(tmp / "does-not-exist", None, theater="Hellas")
+    check("目录不存在也不崩", not scratch.maps)
+    check("不存在的目录不算\"扫过\"（免得刷屏）",
+          not any(s.exists for s in scratch.scans))
+
+    # ── E. 只读 PNG 头拿尺寸（不依赖图形库）───────────────────────
+    p = tmp / "dim.png"
+    _fake_png(p, 4096, 512 * 1024)
+    check("png_dimensions 读出 4096", png_dimensions(p) == (4096, 4096))
+    check("非 PNG 返回 None",
+          png_dimensions(Path(__file__).resolve()) is None)
+
+    # ── F. 默认图不能挑最大的那张 ──────────────────────────────────
+    big = tmp / "big"
+    big.mkdir()
+    _fake_png(big / "Hellas.png", 4096, 1 * 1024 * 1024)
+    _fake_png(big / "Hellas8K.png", 8192, 192 * 1024 * 1024)
+    picked = pick_default_map(find_theater_maps(None, big, theater="Hellas"))
+    check("★ 默认挑最小的 4K，不是 768 MB 的 16K",
+          picked is not None and picked.width == 4096, str(picked))
+
+    check("设置项名字和文档一致", MAP_DIR_SETTING_HINT == "GFVFW_BMS_MAP_DIR")
+    check("最小边长是 1024", MIN_MAP_SIDE == 1024)
+    check("find_theater_maps 仍然返回列表（旧调用点不受影响）",
+          isinstance(find_theater_maps(None, custom, theater="Hellas"), list))
+
+
+def test_map_without_theater_data() -> None:
+    """[7B] **线上情形**端到端：没有剧场数据，只有自备底图目录。
+
+    这是服务器上的真实处境：``/srv/gfvfw/bms-data`` 里没有 BMS 自带的剧场图
+    （不该拷那 1.6 GB），底图只能来自 ``GFVFW_BMS_MAP_DIR``。
+    这条测试确保那种情况下态势图**真的有背景图**，而不是只画点线。
+    """
+    print("\n[7B] 无剧场数据 + 自备底图（线上情形）")
+    from fastapi.testclient import TestClient
+
+    import gfvfw.config as cfg
+    import gfvfw.db as dbmod
+    import gfvfw.web.deps as deps
+    from gfvfw.models import Member, MemberRole, Role, User
+    from gfvfw.models.campaign_state import CampaignSave
+    from gfvfw.models.flight import Campaign
+    from gfvfw.security import hash_password
+    from gfvfw.services.bootstrap import seed
+
+    tmp = Path(tempfile.mkdtemp())
+    eng = create_engine("sqlite+pysqlite:///%s" % (tmp / "m.sqlite3").as_posix(),
+                        connect_args={"check_same_thread": False})
+    Base.metadata.create_all(eng)
+    TS = sessionmaker(bind=eng, autoflush=False, expire_on_commit=False)
+
+    appmod = sys.modules["gfvfw.web.app"]
+    orig = (dbmod.SessionLocal, deps.SessionLocal, appmod.SessionLocal,
+            cfg.settings.storage_dir, cfg.settings.bms_map_dir,
+            cfg.settings.bms_install_path)
+    dbmod.SessionLocal = deps.SessionLocal = appmod.SessionLocal = TS
+    cfg.settings.storage_dir = tmp / "storage"
+
+    # 自备底图目录：只有一张 Hellas 图
+    maps_dir = tmp / "maps"
+    maps_dir.mkdir()
+    _fake_png(maps_dir / "Hellas.png", 4096, 3 * 1024 * 1024)
+    cfg.settings.bms_map_dir = maps_dir
+    # 剧场数据**故意指向不存在的地方** —— 模拟服务器上没拷 BMS 数据
+    cfg.settings.bms_install_path = tmp / "no-such-bms"
+
+    _CSRF = re.compile(r'name="csrf_token"\s+value="([^"]+)"')
+    try:
+        with TS() as db:
+            seed(db)
+            mem = Member(callsign="Admiral", status="active")
+            db.add(mem)
+            db.flush()
+            db.add(User(username="admiral",
+                        password_hash=hash_password("password123"),
+                        status="active", member_id=mem.id))
+            role = db.scalar(select(Role).where(Role.code == "owner"))
+            db.add(MemberRole(member_id=mem.id, role_id=role.id))
+            camp = Campaign(name="Hellas 演练", theater="Hellas")
+            db.add(camp)
+            db.flush()
+            db.add(CampaignSave(
+                campaign_id=camp.id, sha256="a" * 64,
+                original_filename="fake.cam", stored_path="fake.cam",
+                size_bytes=1024, theater="Hellas", parse_status="parsed",
+                bullseye_x=512, bullseye_y=512))
+            db.commit()
+            cid = camp.id
+
+        app = appmod.create_app()
+        with TestClient(app) as client:
+            tok = _CSRF.search(client.get("/login").text).group(1)
+            check("owner 登录成功", client.post(
+                "/login", data={"username": "admiral", "password": "password123",
+                                "csrf_token": tok},
+                follow_redirects=False).status_code == 303)
+
+            r = client.get("/theater/%s/map" % cid)
+            check("态势图页面可打开", r.status_code == 200,
+                  "得到 %d" % r.status_code)
+            m = r.text
+            check("★ 没有剧场数据也画出了底图（<image> 在）",
+                  "<image" in m and "/map/image/" in m,
+                  "页面里没有 <image> —— 底图没出来")
+            check("底图被标注为自备（★）", "★" in m or "自备" in m)
+            check("没配剧场数据时页面说明了原因（不再只写\"未找到\"）",
+                  "剧场数据" in m or "自备" in m)
+
+            idx = re.search(r"/map/image/(\d+)", m)
+            check("拿得到底图下标", idx is not None)
+            if idx:
+                img = client.get("/theater/%s/map/image/%s" % (cid, idx.group(1)),
+                                 follow_redirects=False)
+                check("★ 自备底图可以下载", img.status_code == 200,
+                      "得到 %d" % img.status_code)
+                check("下来的确实是 PNG",
+                      img.content[:8] == b"\x89PNG\r\n\x1a\n")
+                check("下载体积与源文件一致",
+                      len(img.content) == (maps_dir / "Hellas.png").stat().st_size,
+                      "%d vs %d" % (len(img.content),
+                                    (maps_dir / "Hellas.png").stat().st_size))
+
+            # 一张图都没有时，页面必须给出可操作的说明
+            cfg.settings.bms_map_dir = tmp / "nowhere"
+            r2 = client.get("/theater/%s/map" % cid)
+            check("没底图时页面仍可打开（不崩）", r2.status_code == 200)
+            check("★ 空状态给出设置项名字", "GFVFW_BMS_MAP_DIR" in r2.text)
+            check("★ 空状态给出具体动作（放哪张图/怎么重启）",
+                  ("_4K" in r2.text or "正方形" in r2.text))
+            check("空状态不含 <image>", "<image" not in r2.text)
+    finally:
+        (dbmod.SessionLocal, deps.SessionLocal, appmod.SessionLocal,
+         cfg.settings.storage_dir, cfg.settings.bms_map_dir,
+         cfg.settings.bms_install_path) = orig
+        eng.dispose()
+
+
 def main() -> int:
     print("=" * 72)
     print("战役管理自校验")
@@ -1175,6 +1410,16 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print("  ERROR [7] 非有限浮点防护抛异常: %s" % exc)
         FAILURES.append("非有限浮点防护异常: %s" % exc)
+    try:
+        test_map_discovery()
+    except Exception as exc:  # noqa: BLE001
+        print("  ERROR [7A] 剧场底图发现抛异常: %s" % exc)
+        FAILURES.append("剧场底图发现异常: %s" % exc)
+    try:
+        test_map_without_theater_data()
+    except Exception as exc:  # noqa: BLE001
+        print("  ERROR [7B] 无剧场数据底图抛异常: %s" % exc)
+        FAILURES.append("无剧场数据底图异常: %s" % exc)
 
     bms_env = os.environ.get("GFVFW_BMS_INSTALL_PATH") or r"G:\BMS\Falcon BMS 4.38"
     bms = Path(bms_env) if bms_env and Path(bms_env).is_dir() else None
