@@ -32,7 +32,7 @@ from ...permissions import (
 )
 from ...services import logbook as LB
 from ...services.audit import record_audit
-from ...services.naming import callsign_owner, callsign_shadows_username
+from ...services.naming import callsign_owner
 from ..deps import (
     Principal, get_db, require, require_login, require_member,
 )
@@ -305,12 +305,10 @@ def member_create(request: Request,
     if problem:
         return fail(problem + "。")
 
-    # ★ 呼号也不得与某个已有**登录名**相同（跨命名空间）。
-    #    漏掉这一条的话：先有人注册了用户名 "Viper"（游客），你再建名册成员
-    #    "Viper" —— 那位游客的显示名回落成用户名，于是名册里看起来有两个 Viper。
-    shadow = callsign_shadows_username(db, callsign)
-    if shadow:
-        return fail(shadow + "。请先把那个账号改名，或换一个呼号。")
+    # 这里**曾经**还禁止"呼号与某个已有登录名相同"（跨命名空间）。
+    # 已按联队口径取消：用呼号当登录名是常规做法。详见
+    # gfvfw.services.naming 的模块 docstring。
+    # 呼号自身的唯一性（上面那条）**不变** —— 名册重名会让 ACMI 归并认错人。
 
     if status not in STATUS_LABELS:
         return fail("状态取值不合法。")

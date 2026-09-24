@@ -2,8 +2,10 @@
 {% block title %}直接开队员账号 · {{ SITE_NAME }}{% endblock %}
 
 {% block content %}
-{# ⚠️ 本页**不在任何导航里** —— 只能靠地址进入。这不是安全措施（地址就在源码里），
-   真正的防线是路由上的 require(application.review)。也不要把它加进菜单。 #}
+{# ⚠️ 本页**不在任何导航里** —— 只能靠地址进入。默认**公开**（不需要登录、
+   不需要任何权限），见 routers/enroll.py 的模块 docstring。
+   公开 ⇒ **链接本身就是凭证**：拿到链接的人能一步给自己开一个队员账号。
+   要收回公开：GFVFW_ENROLL_OPEN=false。不要把它加进菜单。 #}
 <div class="page-head">
   <div>
     <h1>直接开队员账号</h1>
@@ -13,19 +15,46 @@
     </div>
   </div>
   <div>
-    <a class="btn ghost" href="/members">成员名册</a>
-    <a class="btn ghost" href="/applications">入队审批</a>
+    {% if enroll_open %}
+      <a class="btn ghost" href="/login">已有账号？去登录</a>
+    {% else %}
+      <a class="btn ghost" href="/members">成员名册</a>
+      <a class="btn ghost" href="/applications">入队审批</a>
+    {% endif %}
   </div>
 </div>
 
-<div class="flash info">
-  <strong>这一页不在导航里</strong>，只有知道地址 <code>/enroll</code> 的人能打开；
-  而且需要 <code>application.review</code> 权限（指挥 / owner）。
-  <br><span class="muted small">
-    正常入队请走 <a href="/applications">入队审批</a> —— 那一页有申请内容可看，
-    能把关。本页只适合"线下已经确认过身份"或"名册里有号没账号"的情况。
-  </span>
-</div>
+{% if enroll_open %}
+  <div class="flash warn">
+    <strong>拿到这个链接就能给自己开一个队员账号。</strong>
+    本页<strong>不需要登录、不需要任何权限</strong> —— 也没有审批。
+    建出来的账号立刻能看到<strong>队内全部内容</strong>并能提交数据。
+    <br><span class="small">
+      所以<strong>链接本身就是凭证</strong>：只发给你确认过身份的人。
+      「不在导航里」不等于安全 —— 地址是固定的，读过源码的人都知道。
+      想收回公开，把 <code>GFVFW_ENROLL_OPEN=false</code> 写进
+      <code>/etc/gfvfw/env</code> 并重启（恢复为需要
+      <code>application.review</code> 权限），<strong>不用改代码</strong>。
+    </span>
+  </div>
+{% else %}
+  <div class="flash info">
+    <strong>本页当前为受限模式</strong>（<code>GFVFW_ENROLL_OPEN=false</code>）：
+    需要 <code>application.review</code> 权限（指挥 / owner）。
+    <br><span class="muted small">
+      正常入队请走 <a href="/applications">入队审批</a> —— 那一页有申请内容可看，
+      能把关。本页适合"线下已经确认过身份"或"名册里有号没账号"的情况。
+    </span>
+  </div>
+{% endif %}
+
+{% if logged_in_as %}
+  <div class="flash info small">
+    你当前以 <strong>{{ logged_in_as }}</strong> 的身份登录。
+    本页开出的<strong>是新账号</strong>，<strong>不会</strong>替换你现在的会话 ——
+    开完号请让对方自己到 <a href="/login">登录</a>。
+  </div>
+{% endif %}
 
 {% if did == 'created' %}
   <div class="flash ok">
@@ -163,8 +192,12 @@
 
     <p class="small muted" style="margin-bottom:0">
       ⚠️ <strong>呼号必须唯一</strong> —— 名册重名会让 ACMI 归并认错人。
-      呼号与登录名也<strong>不能同名</strong>（否则在名册里看起来像两个人同名）。
+      登录名<strong>可以与呼号相同</strong>（联队本来就用呼号当登录名）：
+      两个名字各自唯一即可，互相不冲突。
       军衔不用在这里填：让本人上传自己的 Logbook 会自动写入。
+      {% if max_per_day %}
+        <br>同一个网络每天最多在这里开 <strong>{{ max_per_day }}</strong> 个账号。
+      {% endif %}
     </p>
   </form>
 </div>

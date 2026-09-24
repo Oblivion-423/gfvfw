@@ -116,6 +116,27 @@ class Settings(BaseSettings):
     #: 邀请码有效期（小时）
     invite_ttl_hours: int = 72
 
+    #: **``/enroll`` 是否公开**（``GFVFW_ENROLL_OPEN``）。
+    #:
+    #: ``/enroll`` 是"一步开一个队员账号"的隐藏页（跳过注册与申请）。
+    #: 联队口径是**公开**：把链接发给本人，他自己开号。
+    #:
+    #: ⚠️ 公开意味着**链接本身就是凭证**：知道 ``/enroll`` 地址的任何人都能
+    #:    给自己开一个 ``status='active'`` 的队员账号，从而看到队内全部内容
+    #:    与写操作。这在"链接只发给线下确认过的人"的前提下是可接受的联队决定，
+    #:    但它和"需要 application.review 权限"是**互斥的两种安全模型**：
+    #:    后者泄漏链接无害，前者泄漏链接等于泄漏一个队员名额。
+    #:    要收回公开，把 ``GFVFW_ENROLL_OPEN=false`` 写进 ``/etc/gfvfw/env``
+    #:    并重启即可（恢复为"需要 application.review"）。
+    enroll_open: bool = True
+
+    #: 同一个来源 IP 每天最多通过 ``/enroll`` 开出几个账号。
+    #:
+    #: ``/enroll`` 公开后，"谁都能开队员号"就成了一条可被批量利用的通路：
+    #: 不需要权限，也不需要审批。这道闸不改变权限模型（它不拦人**能不能**开号），
+    #: 只挡住"一个来源无限刷"。默认给得比较宽 —— 联队集体入队常常共用一个出口 IP。
+    max_enroll_per_ip_per_day: int = 20
+
     # ---- 备份 ----
     backup_dir: Path = Field(default_factory=lambda: BASE_DIR / "var" / "backups")
     backup_keep_days: int = 30

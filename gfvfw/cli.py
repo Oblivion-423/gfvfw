@@ -35,10 +35,7 @@ from .permissions import ROLE_DEFINITIONS
 from .security import hash_password, new_token, password_problem
 from .services.audit import record_audit
 from .services.bootstrap import ensure_schema, seed
-from .services.naming import (
-    callsign_owner, callsign_shadows_username, username_owner,
-    username_shadows_callsign,
-)
+from .services.naming import callsign_owner, username_owner
 
 log = logging.getLogger("gfvfw.cli")
 
@@ -143,14 +140,8 @@ def cmd_create_member(args) -> None:
             problem = username_owner(db, args.username)
             if problem:
                 raise SystemExit(problem)
-            # 跨命名空间：呼号与登录名同名会让人分不清谁是谁
-            problem = callsign_shadows_username(
-                db, args.callsign, ignore_username=args.username)
-            if problem:
-                raise SystemExit(problem)
-            problem = username_shadows_callsign(db, args.username)
-            if problem:
-                raise SystemExit(problem)
+            # 跨命名空间（呼号 vs 登录名）**不再**互斥：联队用呼号当登录名是
+            # 常规做法。这里只保留"各自唯一"两条。详见 services/naming.py。
 
         member = Member(callsign=args.callsign.strip(), status=args.status)
         db.add(member)

@@ -37,6 +37,12 @@
       {% if no_app %}· 其中 {{ no_app }} 个只注册、未申请{% endif %}
     </span>
   </h2>
+  <p class="muted small" style="margin-top:-6px">
+    <strong>看「想要呼号」那一列，别看登录名。</strong>
+    登录名允许与某个呼号相同（联队用呼号当登录名），所以登录名可能是别人的
+    呼号 —— 真正决定名册身份的是右边的呼号。呼号重名会被拦下，不会建出两个
+    同名成员。
+  </p>
 
   {% if not rows %}
     <p class="muted small" style="margin:0">
@@ -47,7 +53,7 @@
     <table>
       <thead>
         <tr>
-          <th style="width:110px">用户名</th>
+          <th style="width:110px">登录名</th>
           <th style="width:110px">想要呼号</th>
           <th>申请内容</th>
           <th style="width:130px">提交时间</th>

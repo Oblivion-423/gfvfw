@@ -41,14 +41,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ...db import utcnow
-from ...models import Application, Member, User
+from ...models import Application, User
 from ...security import (
     SESSION_USER_KEY, hash_password, password_problem, verify_csrf,
 )
 from ...services.audit import record_audit
-from ...services.naming import (
-    callsign_owner, username_owner, username_shadows_callsign,
-)
+from ...services.naming import callsign_owner, username_owner
 from ..deps import Principal, get_db, get_principal, require_login
 from ..templating import render
 
@@ -105,11 +103,10 @@ def _recent_registrations(db: Session, ip_hash: str) -> int:
 def _callsign_taken(db: Session, callsign: str) -> bool:
     """呼号是否已被占用（名册成员或未撤销的申请）。
 
-    ⚠️ 实现统一在 :mod:`gfvfw.services.naming` —— 别在这里再写一份。
-    四个入口（注册 / 名册新建 / 隐藏的直开页 / CLI）共用同一套判定，
+    🛠️ 实现统一在 :mod:`gfvfw.services.naming` —— 别在这里再写一份。
+    四个入口（注册 / 名册新建 / 公开直开页 / CLI）共用同一套判定，
     否则迟早出现"某个入口放过了"的不一致。
     """
-    from ...services.naming import callsign_owner
     return callsign_owner(db, callsign) is not None
 
 
@@ -185,17 +182,17 @@ def register_submit(request: Request,
     if username_owner(db, username) is not None:
         return fail("这个用户名已经被占用了，换一个吧。")
 
-    # ★ 用户名不得与名册呼号相同。
+    # ⚠️ 这里**曾经**禁止"用户名与名册呼号相同"，现已按联队口径取消。
     #
-    # 这堵的是"游客看起来像现有成员"的漏洞：游客在界面上的显示名会回落成
-    # 用户名（deps.Principal.display_name），所以一个用户名恰好等于
-    # 某个成员呼号的游客，在名册与审批页里看起来就是那位成员。
-    # 提升时的呼号校验会拦住他（不会真出现两个同名成员），但"看起来像"
-    # 已经够让管理员看错人了。
-    shadow = username_shadows_callsign(db, username)
-    if shadow:
-        return fail(shadow)
-
+    # 联队本来就用呼号当登录名（"登录名可以和名册中的呼号相同"），
+    # 那条禁令会把最自然的用法挡在门外。改为消除"看起来像"本身：
+    #   * 导航栏的名字旁边**始终**带身份标签（游客 / 队员 / 角色名），
+    #     所以「Viper 游客」与「Viper 队员」不会混为一谈；
+    #   * 本页下一段会把新账号以 pending（游客）建出来，**没有任何权限点**；
+    #   * ACMI 认领需要 ACMI_CLAIM_PILOT（仅队员），重名换不来别人的架次；
+    #   * 呼号唯一性照旧：提升为队员时 callsign_owner 会拦下重名，不会出现
+    #     两个同名成员。
+    # 详见 gfvfw.services.naming 的模块 docstring。
     ip_hash = _ip_hash(request)
     if _recent_registrations(db, ip_hash) >= MAX_REGISTRATIONS_PER_IP_PER_DAY:
         log.warning("注册触发每日上限 ip_hash=%s", ip_hash[:16])

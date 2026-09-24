@@ -1,32 +1,43 @@
-"""呼号 / 用户名的唯一性与**相互**冲突判定（唯一实现点）。
+"""呼号 / 用户名的唯一性判定（唯一实现点）。
 
-为什么需要这个模块
-------------------
 系统里有**两个独立的命名空间**：
 
 * ``members.callsign`` —— 名册呼号，游戏内身份，ACMI 归并靠它认人；
 * ``users.username``   —— 登录名。
 
-它们各自有唯一约束，但**跨命名空间的冲突没人管**。后果是真实存在的：
-网页注册只校验 ``users.username``，不看名册呼号；而游客在界面上的显示名
-会回落成用户名（``deps.Principal.display_name``）—— 于是一个用户名恰好
-等于现有成员呼号的游客，**在名册和审批页里看起来就是那位成员**。
-提升时的呼号校验会拦住他（不会真的出现两个同名成员），但"看起来像"
-本身就足以让管理员看错人。
+它们各自有唯一约束。本模块把这两条约束**集中在一处**，别在各入口重写：
 
-四个入口都必须用同一套判定，否则各写一份、迟早不一致：
-
-======================  ==========================  ============================
-入口                    要防的                      用哪个函数
-======================  ==========================  ============================
-``/register``（公开）    用户名冒充名册呼号          :func:`username_shadows_callsign`
-``/members/new``        呼号撞上已有登录名          :func:`callsign_shadows_username`
-``/enroll``（隐藏）      两者都要 + 呼号唯一         :func:`callsign_owner`
-``cli create-member``   两者都要 + 用户名唯一       :func:`username_owner`
-======================  ==========================  ============================
+==========================  ==========================  ==========================
+入口                        要防的                      用哪个函数
+==========================  ==========================  ==========================
+``/register``（公开）        登录名重复                  :func:`username_owner`
+``/enroll``（公开）          两者都查 + 呼号唯一          :func:`callsign_owner`
+``/members/new``            呼号重复                    :func:`callsign_owner`
+``cli create-member``       两者都查                    :func:`callsign_owner`
+==========================  ==========================  ==========================
 
 ⚠️ 全部**不区分大小写**，且**排除已软删除**的名册成员 ——
 软删的成员呼号可以重新启用（联队确实会有人退役后新人接呼号）。
+
+关于"两个命名空间不得同名"这条规则（**已按联队口径取消**）
+----------------------------------------------------------
+这里曾经禁止 ``username == callsign``，理由是：游客在界面上的显示名会回落成
+用户名（``deps.Principal.display_name``），于是一个用户名恰好等于现有成员呼号
+的账号，**在名册与审批页里看起来就是那位成员**（冒充）。
+
+但联队的实际口径是**用呼号当登录名**（"登录名可以和名册中的呼号相同"），
+这条禁令会把联队最自然的用法挡在门外。所以改为**消除'看起来像'本身**，
+而不是禁止重名：
+
+* 导航栏的名字旁边**始终**跟着身份标签（``principal.identity_label``：
+  访客 / 游客 / 角色名），所以"Viper 游客"与"Viper 队员"不会混为一谈；
+* 入队审批页把该列明确标成**登录名**，并注明"登录名可能与呼号相同"；
+* 真正会把关的是**呼号唯一性**（:func:`callsign_owner`）：提升为队员时仍会
+  拦下重名，不会出现两个同名成员；
+* ACMI 认领与归并走的是 ``ACMI_CLAIM_PILOT`` 权限点（**仅队员**），
+  与登录名无关，所以重名拿不到别人的架次。
+
+也就是说：**重名现在允许，但重名换不来任何权限。**
 """
 
 from __future__ import annotations
@@ -98,46 +109,6 @@ def username_owner(db: Session, username: str) -> Optional[str]:
         return None
     if user_by_username(db, username) is not None:
         return "用户名「%s」已被占用" % username.strip()
-    return None
-
-
-def callsign_shadows_username(db: Session, callsign: str,
-                              *,
-                              ignore_username: Optional[str] = None) -> Optional[str]:
-    """**呼号**是否与某个已有**登录名**相同 → 返回可读原因。
-
-    ``ignore_username``：正在为同一个人同时创建账号时，那个登录名要排除掉
-    （否则 ``--callsign Viper --username Viper`` 会自己撞自己）。
-    """
-    if not callsign or not callsign.strip():
-        return None
-    cs = callsign.strip()
-    stmt = select(User.username).where(_lower(User.username) == cs.lower())
-    if ignore_username:
-        stmt = stmt.where(_lower(User.username) != ignore_username.strip().lower())
-    hit = db.scalar(stmt.limit(1))
-    if hit is not None:
-        return ("呼号「%s」与已有的**登录名**相同（账号：%s）—— "
-                "两者同名会让人分不清谁是谁" % (cs, hit))
-    return None
-
-
-def username_shadows_callsign(db: Session, username: str) -> Optional[str]:
-    """**登录名**是否与某个名册**呼号**相同 → 返回可读原因。
-
-    这是"游客看起来像现有成员"的那个漏洞的正面拦截。
-    """
-    if not username or not username.strip():
-        return None
-    un = username.strip()
-    hit = db.scalar(
-        select(Member.callsign)
-        .where(_lower(Member.callsign) == un.lower(),
-               Member.deleted_at.is_(None))
-        .limit(1))
-    if hit is not None:
-        return ("用户名「%s」与名册里的呼号相同（成员：%s）。"
-                "换个登录名 —— 否则你在名册/审批页里看起来就是那位成员" % (un, hit))
     return None
 
 
