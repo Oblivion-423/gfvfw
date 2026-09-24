@@ -153,13 +153,29 @@ def save_delete(campaign_id: str, save_id: str, request: Request,
         status_code=303)
 
 
-def _nav_ctx(db: Session, campaign: Campaign) -> dict:
-    """所有战役子页面共用的上下文。"""
-    return {
+def _nav_ctx(db: Session, campaign: Campaign,
+             principal: Principal | None = None) -> dict:
+    """所有战役子页面共用的上下文。
+
+    ⚠️ ``can_upload`` / ``can_manage`` / ``can_delete`` **必须在这里给全**。
+        它们以前只在 ``theater_index`` 里设置，而 ``theater/detail.html`` 也用
+        了 ``can_upload`` —— 于是详情页上那两个"去上报一份 / 再上报一份存档"
+        按钮**永远是隐藏的**（Jinja 里未定义变量为假），有权限的人根本看不到。
+        "写好了却点不到"和没做一样，所以统一在这里按权限算好，各子页共用。
+    """
+    ctx = {
         "campaign": campaign,
         "saves": svc.saves_for(db, campaign.id),
         "latest": svc.latest_save(db, campaign.id),
     }
+    if principal is not None:
+        ctx.update({
+            "can_upload": principal.can(CAMPAIGN_UPLOAD),
+            "can_manage": principal.can(CAMPAIGN_MANAGE),
+            # 与 /campaigns 的作废/恢复同一个权限点、同一个 handler
+            "can_delete": principal.can(CAMPAIGN_MANAGE),
+        })
+    return ctx
 
 
 # ==========================================================================
@@ -167,25 +183,34 @@ def _nav_ctx(db: Session, campaign: Campaign) -> dict:
 # ==========================================================================
 
 @router.get("/theater")
-def theater_index(request: Request, db: Session = Depends(get_db),
+def theater_index(request: Request, deleted: str = "",
+                  db: Session = Depends(get_db),
                   principal: Principal = Depends(require_login)):
     """战役管理首页：所有带存档的战役 + 最新态势摘要。
 
     ⚠️ 列表页 —— 游客可看（"只开列表，不开详情"）。
     各战役的**详情**（态势图 / 基地 / 兵力 / 目标点 / 时间线）仍是
     ``require(CAMPAIGN_VIEW)``，即仅队员。
-    写操作入口由模板里的 ``can_upload`` / ``can_manage`` 自行隐藏，
-    游客这两项都是 ``False``（没有任何权限点）。
-    """
+    写操作入口由模板里的 ``can_upload`` / ``can_manage`` / ``can_delete``
+    自行隐藏，游客这几项都是 ``False``（没有任何权限点）。
 
-    campaigns = list(db.scalars(
-        select(Campaign).where(Campaign.deleted_at.is_(None))
-        .order_by(Campaign.created_at)))
+    ``?deleted=1`` 列出**已作废**的战役（仅 ``campaign.manage``）——
+    ⚠️ 恢复入口必须放在**这一页**：联队口中的"战役管理"就是 ``/theater``
+        （顶栏那一项指的就是它），而作废/恢复的 handler 挂在 ``/campaigns`` 下。
+        只把按钮放在 ``/campaigns`` 的话，用户在自己天天用的页面上根本看不到
+        —— 本轮的反馈"战役管理中仍然不能删除战役"就是这么来的。
+    """
+    can_manage = principal.can(CAMPAIGN_MANAGE)
+    show_deleted = deleted in ("1", "true", "yes") and can_manage
+
+    stmt = select(Campaign).where(
+        Campaign.deleted_at.is_not(None) if show_deleted
+        else Campaign.deleted_at.is_(None))
+    campaigns = list(db.scalars(stmt.order_by(Campaign.created_at)))
 
     rows = []
     for camp in campaigns:
-        ov = svc.campaign_overview(db, camp)
-        rows.append(ov)
+        rows.append(svc.campaign_overview(db, camp))
 
     orphans = db.scalar(
         select(func.count()).select_from(CampaignSave)
@@ -194,11 +219,16 @@ def theater_index(request: Request, db: Session = Depends(get_db),
     return render(request, "theater/index.html", {
         "rows": rows,
         "orphans": orphans,
+        "show_deleted": show_deleted,
+        "deleted_count": (db.scalar(
+            select(func.count()).select_from(Campaign)
+            .where(Campaign.deleted_at.is_not(None))) or 0),
         "bms_path": settings.bms_install_path,
         "bms_ok": bool(settings.bms_install_path)
         and Path(settings.bms_install_path).is_dir(),
         "can_upload": principal.can(CAMPAIGN_UPLOAD),
-        "can_manage": principal.can("campaign.manage"),
+        "can_manage": can_manage,
+        "can_delete": can_manage,
         "total_saves": db.scalar(select(func.count()).select_from(CampaignSave)) or 0,
     })
 
@@ -334,7 +364,7 @@ def theater_detail(campaign_id: str, request: Request,
                    principal: Principal = Depends(require(CAMPAIGN_VIEW))):
     camp = _load_campaign(db, campaign_id)
     ov = svc.campaign_overview(db, camp)
-    ctx = _nav_ctx(db, camp)
+    ctx = _nav_ctx(db, camp, principal)
     ctx.update({
         "ov": ov,
         "teams": ov.teams,
@@ -629,7 +659,7 @@ def theater_air(campaign_id: str, request: Request, db: Session = Depends(get_db
         .order_by(CampaignUnit.team_id, CampaignUnit.unit_id)))
 
     return render(request, "theater/air.html", {
-        **_nav_ctx(db, camp), "save": sv,
+        **_nav_ctx(db, camp, principal), "save": sv,
         "squadrons": [_sq_row(u) for u in squadrons],
         "packages": [_pkg_row(u) for u in packages], "flights": flights,
         "aircraft_counts": Counter(f.aircraft_type or "未识别" for f in flights).most_common(),
@@ -696,7 +726,7 @@ def theater_ground(campaign_id: str, request: Request, db: Session = Depends(get
         .order_by(CampaignUnit.team_id, CampaignUnit.unit_id)))
 
     return render(request, "theater/ground.html", {
-        **_nav_ctx(db, camp), "save": sv,
+        **_nav_ctx(db, camp, principal), "save": sv,
         "ground": ground, "naval": naval,
         "ground_by_kind": Counter(u.unit_kind for u in ground).most_common(),
         "team_names": {t.team_id: t.name for t in db.scalars(
@@ -740,7 +770,7 @@ def theater_objectives(campaign_id: str, request: Request,
         .group_by(CampaignObjective.team_id)).all())
 
     return render(request, "theater/objectives.html", {
-        **_nav_ctx(db, camp), "save": sv,
+        **_nav_ctx(db, camp, principal), "save": sv,
         "objs": objs,
         "type_counts": sorted(counts.items(), key=lambda x: -x[1]),
         "owned_counts": sorted(owned.items()),
@@ -783,7 +813,7 @@ def theater_timeline(campaign_id: str, request: Request, db: Session = Depends(g
         grabs[(c.to_team, c.from_team)] += 1
 
     return render(request, "theater/timeline.html", {
-        **_nav_ctx(db, camp),
+        **_nav_ctx(db, camp, principal),
         "saves": saves,
         "changes": changes,
         "series": {k: v for k, v in sorted(series.items())},
@@ -804,7 +834,7 @@ def theater_saves(campaign_id: str, request: Request, db: Session = Depends(get_
                   principal: Principal = Depends(require(CAMPAIGN_VIEW))):
     camp = _load_campaign(db, campaign_id)
     return render(request, "theater/saves.html", {
-        **_nav_ctx(db, camp),
+        **_nav_ctx(db, camp, principal),
         "all_saves": list(db.scalars(
             select(CampaignSave).where(CampaignSave.campaign_id == camp.id)
             .order_by(CampaignSave.campaign_time_ms))),

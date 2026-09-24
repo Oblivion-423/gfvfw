@@ -817,6 +817,69 @@ def test_web(bms: Path, cam: Path) -> None:
                                 .where(AuditLog.target_table == "campaign_saves",
                                        AuditLog.action == "delete")) >= 1)
             check("★ 磁盘原件已删除", not sp.exists())
+
+            # ── ★ 战役管理（/theater）里的「作废战役」入口 ─────────────
+            #    用户反馈"战役管理中仍然不能删除战役"。作废 handler 一直都在，
+            #    但按钮只挂在 /campaigns 下，而联队口中的"战役管理"是 /theater
+            #    （顶栏那一项指的就是它）—— 于是入口在用户看不见的地方。
+            #    这里盯的是**入口本身**，而且盯在正确的那一页上。
+            print("\n[10b] ★ 战役管理里的作废 / 恢复入口")
+            with TestClient(app) as client:
+                check("owner 登录（看战役管理）", login(client, "admiral"))
+                r = client.get("/theater")
+                check("战役管理列表可打开", r.status_code == 200,
+                      "得到 %d" % r.status_code)
+                check("★ 列表里有「作废」入口（POST /campaigns/<id>/delete）",
+                      "/campaigns/%s/delete" % cid in r.text,
+                      "战役管理列表里没有作废按钮")
+                check("列表里有「显示已作废」入口", "theater?deleted=1" in r.text)
+
+                r = client.get("/theater/%s" % cid)
+                check("★ 战役详情页里有「作废此战役」按钮",
+                      "作废此战役" in r.text)
+                # ⚠️ 本节的**前一段刚把唯一一份存档删掉**了（§10 的删除存档测试），
+                #    所以此时 `ov.save is None`，走的是"还没有可用存档"那个分支 ——
+                #    它的按钮文案是「去上报一份」，不是「再上报一份存档」。
+                #    两者都由 can_upload 控制，所以断言"有其中之一"才是对的；
+                #    只认后者会得到一个假失败。
+                check("★ 详情页的上报入口真的显示了（can_upload 以前没传进来）",
+                      "再上报一份存档" in r.text or "去上报一份" in r.text,
+                      "can_upload 恒为假 —— 上报入口以前永远不显示")
+
+                # 真的作废：走的就是详情页那个表单的目标地址
+                tok = _CSRF.search(client.get("/theater/%s" % cid).text).group(1)
+                r = client.post("/campaigns/%s/delete" % cid,
+                                data={"csrf_token": tok},
+                                follow_redirects=False)
+                check("★ 在战役管理里作废战役 → 303", r.status_code == 303,
+                      "得到 %d" % r.status_code)
+                r = client.get("/theater")
+                check("★ 作废后战役从战役管理列表消失", cid not in r.text,
+                      "还在列表里")
+                r = client.get("/theater?deleted=1")
+                check("★ 已作废视图里能看到它",
+                      "/campaigns/%s/restore" % cid in r.text)
+                tok = _CSRF.search(r.text).group(1)
+                r = client.post("/campaigns/%s/restore" % cid,
+                                data={"csrf_token": tok},
+                                follow_redirects=False)
+                check("★ 恢复 → 303", r.status_code == 303,
+                      "得到 %d" % r.status_code)
+                r = client.get("/theater")
+                check("★ 恢复后回到战役管理列表",
+                      "/campaigns/%s/delete" % cid in r.text)
+
+            with TestClient(app) as client:
+                login(client, "rookie")           # 普通队员：无 campaign.manage
+                r = client.get("/theater")
+                check("★ 普通队员看不到「作废」按钮",
+                      "/campaigns/%s/delete" % cid not in r.text)
+                r = client.get("/theater?deleted=1")
+                check("★ 普通队员拿不到已作废视图（回落到普通列表）",
+                      "已作废" not in r.text or "作废此战役" not in r.text)
+                r = client.get("/theater/%s" % cid)
+                check("★ 普通队员看不到详情页的「作废此战役」",
+                      "作废此战役" not in r.text)
             # 删掉唯一一份存档后，战役总览应变成"没有可用存档"而不是崩掉
             r = client.get("/theater/%s" % cid)
             check("删光存档后战役详情仍可访问（不崩）", r.status_code == 200,

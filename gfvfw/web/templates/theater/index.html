@@ -3,10 +3,15 @@
 
 {% block content %}
 <div class="page-head">
-  <h1>战役管理</h1>
+  <h1>{% if show_deleted %}已作废的战役{% else %}战役管理{% endif %}</h1>
   <div class="sub">
-    Falcon BMS 战役存档（.cam）解析与战场态势。上传存档后即可查看队伍兵力对比、
-    目标点归属、空中/地面/海军部署，以及跨存档的战役进程。
+    {% if show_deleted %}
+      这些战役已作废 —— 它们不在战役列表里、也不出现在任何统计中。
+      记录本身都还在（没有真删），点「恢复」即可放回列表。
+    {% else %}
+      Falcon BMS 战役存档（.cam）解析与战场态势。上传存档后即可查看队伍兵力对比、
+      目标点归属、空中/地面/海军部署，以及跨存档的战役进程。
+    {% endif %}
   </div>
 </div>
 
@@ -22,18 +27,47 @@
   </div>
 {% endif %}
 
+{% if show_deleted %}
+  <div class="flash warn">
+    这里是<strong>已作废</strong>的战役。作废时它下面的任务被移出为「未归属」
+    （任务与架次一条都没删），战役存档也仍保留在它下面。
+    <br><span class="small">
+      ⚠️ 恢复<strong>不会</strong>把任务自动归回来 —— 作废时没有记录那些任务
+      原本属于谁，事后分不清哪些本来就未归属。恢复后请到
+      <a href="/campaigns">战役管理（任务归入）</a>重新归入。
+    </span>
+  </div>
+{% endif %}
+
 <div class="actions" style="margin-top:0">
-  {% if can_upload %}
+  {% if can_upload and not show_deleted %}
     <a class="btn" href="/theater/upload">上报战役存档</a>
   {% endif %}
   <span class="muted small">已入库存档 {{ total_saves }} 份</span>
   {% if orphans %}
     <span class="muted small">· {{ orphans }} 份未归属任何战役</span>
   {% endif %}
+  {% if can_delete %}
+    {% if show_deleted %}
+      <a class="btn ghost" href="/theater">← 返回战役列表</a>
+    {% else %}
+      {# ⚠️ 这个入口**一直显示**，不按 deleted_count 隐藏。
+         只在"已经有作废战役"时才出现的话，用户事先不知道存在恢复路径 ——
+         而"敢不敢点作废"恰恰取决于知不知道能恢复。与 /campaigns 列表页保持一致。 #}
+      <a class="btn ghost" href="/theater?deleted=1">
+        显示已作废{% if deleted_count %}（{{ deleted_count }}）{% endif %}</a>
+    {% endif %}
+  {% endif %}
 </div>
 
 {% if not rows %}
-  <div class="empty">还没有战役。{% if can_upload %}点上面的「上报战役存档」上传第一份存档。{% endif %}</div>
+  <div class="empty">
+    {% if show_deleted %}
+      没有被作废的战役。
+    {% else %}
+      还没有战役。{% if can_upload %}点上面的「上报战役存档」上传第一份存档。{% endif %}
+    {% endif %}
+  </div>
 {% else %}
   <h2>战役列表</h2>
   <table>
@@ -46,11 +80,13 @@
       <th class="num">单位</th>
       <th class="num">易手</th>
       <th>交战方</th>
+      {% if can_delete %}<th>操作</th>{% endif %}
     </tr>
     {% for ov in rows %}
+      {% set c = ov.campaign %}
       <tr>
-        <td><a href="/theater/{{ ov.campaign.id }}">{{ ov.campaign.name }}</a></td>
-        <td>{{ ov.save.theater|or_dash if ov.save else ov.campaign.theater|or_dash }}</td>
+        <td><a href="/theater/{{ c.id }}">{{ c.name }}</a></td>
+        <td>{{ ov.save.theater|or_dash if ov.save else c.theater|or_dash }}</td>
         <td class="nowrap">
           {% if ov.save %}{{ ov.save.campaign_time_label }}{% else %}<span class="muted">—</span>{% endif %}
         </td>
@@ -69,11 +105,29 @@
             {% endif %}
           {% endfor %}
         </td>
+        {% if can_delete %}
+        <td class="nowrap">
+          {% if show_deleted %}
+            <form method="post" action="/campaigns/{{ c.id }}/restore"
+                  onsubmit="return confirm('恢复战役「{{ c.name }}」？任务不会自动归回，需要你之后手动归入。')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn" type="submit">恢复</button>
+            </form>
+          {% else %}
+            <form method="post" action="/campaigns/{{ c.id }}/delete"
+                  onsubmit="return confirm('作废战役「{{ c.name }}」？\n\n· 该战役下 {{ ov.save_count }} 份存档仍保留\n· 归入它的任务会被移出为「未归属」（任务与架次都不删）\n· 只是标记作废，可在本页「显示已作废」里恢复\n\n确定继续？')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn danger" type="submit">作废</button>
+            </form>
+          {% endif %}
+        </td>
+        {% endif %}
       </tr>
     {% endfor %}
   </table>
 {% endif %}
 
+{% if not show_deleted %}
 <div class="panel" style="margin-top:26px">
   <h2 style="margin-top:0">关于这块功能</h2>
   <div class="small muted" style="line-height:1.8">
@@ -84,7 +138,11 @@
     这样 165 份存档也不会把数据库撑爆。<br>
     <b>与「飞行记录 → 战役记录」的区别</b>：那边是本联队的战争史（谁在哪个任务里飞了什么），
     这边是 BMS <b>战场本身</b>的态势。两者互补。<br>
-    <b>坐标口径</b>：网格 <code>0–1023</code>，原点在西南角，x=东、y=北，每格 1 km。
+    <b>坐标口径</b>：网格 <code>0–1023</code>，原点在西南角，x=东、y=北，每格 1 km。<br>
+    <b>作废一个战役</b>：列表右侧的「作废」按钮。作废 ≠ 删除数据 ——
+    战役记录仍在库里，只是从列表里消失；它下面的任务会被移出为「未归属」。
+    恢复入口在本页上方的「显示已作废」。
   </div>
 </div>
+{% endif %}
 {% endblock %}

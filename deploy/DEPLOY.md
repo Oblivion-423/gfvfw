@@ -1074,8 +1074,8 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 补录一条架次（文件丢了） | 任务详情 →「补录架次」 | `log.approve`（教官/指挥） |
 | 删传错的 ACMI（未归并的） | ACMI 工作台 → 上传阶段 →「删除」 | `acmi.upload`（自己的） |
 | 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
-| **作废一个战役**（建错了/不办了） | 战役详情 → 底部「危险操作」→「作废此战役」 | `campaign.manage`（教官/指挥/owner） |
-| **恢复被作废的战役** | 战役列表 →「显示已作废」→「恢复」 | `campaign.manage` |
+| **作废一个战役**（建错了/不办了） | **战役管理**（顶栏那一项）列表行右侧「作废」，或该战役详情页底部「危险操作」 | `campaign.manage`（教官/指挥/owner） |
+| **恢复被作废的战役** | 战役管理 →「显示已作废」→「恢复」 | `campaign.manage` |
 | **作废一个名册成员**（人走了） | 成员详情 → 底部「账号与危险操作」→「作废此成员」 | `member.delete`（指挥/owner） |
 | **恢复被作废的成员** | 名册 →「显示已作废」→「恢复」 | `member.delete` |
 | **把账号从成员上解绑**（绑错了/要收回访问权） | 成员详情 →「账号与危险操作」→「解绑该账号」 | `member.delete` |
@@ -1099,6 +1099,11 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 > （因为权限加载不看 `deleted_at`）。现在作废会一并停用账号，权限加载也把
 > 软删除的成员当作"没有这个成员"。这个口子有测试守着（含"绕过路由直接软删"
 > 那条路径），不会复活。
+
+> **入口在「战役管理」里，不在别处。** 顶栏的「战役管理」指的是 `/theater`
+> （BMS `.cam` 态势那一套），作废/恢复按钮就在那一页的列表行与战役详情页底部。
+> （作废的 handler 实现挂在 `/campaigns` 下，但 `/campaigns` 是"任务归入"用的
+> 那一套，不是平时找战役的地方。两处入口都能用，别被 URL 绕晕。）
 
 两道**防自锁**的闸（都不是权限问题，是防不可逆的事故）：
 
@@ -1225,6 +1230,8 @@ sudo -u gfvfw -H bash -c 'cd /srv/gfvfw; set -a; . /etc/gfvfw/env; set +a; \
 | 态势图**盖错了剧场的地图** | 自备目录里同时放了多个剧场的图，而文件名都不含剧场名 | 把文件重命名成 `<剧场名>.png`（`Hellas.png`、`korea.png`…）。程序按文件名里的剧场名筛选；一个都匹配不上时才退回"整个目录都用" |
 | 想知道服务器上传链路到底行不行 | —— | 在开发机上跑 `scripts/cam_upload_probe.py http://你的域名 <密码> <某个.cam>`：真的走 HTTP 上传，只在出现服务器异常页时失败。⚠️ 它**会真的写一条存档记录**，先拿探针服务器试 |
 | 找不到"直接开队员账号"的入口 | 它**故意**不进导航 | 直接访问 `/enroll`。默认**公开**，不需要登录也不需要权限 —— 见第 12 节「上线后怎么拉人入队」 |
+| 在哪个页面删战役 / 恢复 | 顶栏「战役管理」= `/theater` | 列表行右侧「作废」、或该战役详情页底部「危险操作」。恢复在战役管理页的「显示已作废」里 —— 见第 12 节 |
+| 改了代码/模板，页面上没变化 | **Python 改动必须重启进程** | `sudo systemctl restart gfvfw`。模板改动会被 Jinja 自动重载（`auto_reload` 默认开），但 Python 模块不会。本地开发建议用 `python -m gfvfw --reload` |
 | 担心 `/enroll` 的链接传出去了 | 公开模式下**链接就是凭证**：任何人拿到它都能给自己开一个队员账号 | 立即在 `/etc/gfvfw/env` 加 `GFVFW_ENROLL_OPEN=false` 并 `systemctl restart gfvfw` → 恢复为"需要 `application.review`"。已开出来的账号**不会**自动回收，需要的话在名册里停用/删除并核对审计里的 `member.enroll` |
 | 打开 `/enroll` 被弹到登录页 / 看到 403 | 说明当前是**受限模式**（`GFVFW_ENROLL_OPEN=false`） | 用 owner 或指挥账号登录即可。受限模式下这正是期望行为，不是 Bug |
 | 有人在 `/enroll` 上被挡住（提示"今天开过 N 个账号"） | 触发了按来源 IP 的每日额度（默认 20） | 联队集体入队常共用一个出口 IP。调 `GFVFW_MAX_ENROLL_PER_IP_PER_DAY` 并重启，或让一部分人改天再开 |
