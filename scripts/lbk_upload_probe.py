@@ -138,7 +138,7 @@ def main() -> int:
     print("  测试文件：%s" % real)
     print("  期望：呼号=%s  %s h  军衔=%s  架次=%s  勋章=%d 枚"
           % (real_rec.callsign, "%.2f" % real_rec.flight_hours,
-             real_rec.rank_code, real_rec.fields.get("counter_76"),
+             real_rec.rank_code, real_rec.fields.get("missions_flown"),
              len(real_rec.medals)))
     blob = real.read_bytes()
 
@@ -187,8 +187,8 @@ def main() -> int:
         check("★ 累计飞行时长自动填入（%s 秒）" % expect_secs,
               m["logbook_hours_seconds"] == expect_secs,
               str(m["logbook_hours_seconds"]))
-        check("★ 累计架次自动填入（%s）" % real_rec.fields.get("counter_76"),
-              m["logbook_sorties"] == real_rec.fields.get("counter_76"),
+        check("★ 累计架次自动填入（%s）" % real_rec.fields.get("missions_flown"),
+              m["logbook_sorties"] == real_rec.fields.get("missions_flown"),
               str(m["logbook_sorties"]))
         check("★ 军衔自动填入（%s）" % real_rec.rank_code,
               rk is not None and rk["name_en"].lower()
@@ -213,8 +213,8 @@ def main() -> int:
         page = client.get(base)
         hours_txt = "%.2f" % real_rec.flight_hours
         check("★ 页面显示飞行小时 %s" % hours_txt, hours_txt in page.text)
-        check("★ 页面显示架次 %s" % real_rec.fields.get("counter_76"),
-              str(real_rec.fields.get("counter_76")) in page.text)
+        check("★ 页面显示架次 %s" % real_rec.fields.get("missions_flown"),
+              str(real_rec.fields.get("missions_flown")) in page.text)
         check("★ 页面显示军衔", real_rec.rank_code in page.text)
         check("★ 页面显示「已写入名册」", "已写入名册" in page.text)
         check("★ 页面没有再提示未登记", "未登记" not in page.text)

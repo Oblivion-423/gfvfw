@@ -36,8 +36,12 @@ BMS Logbook（``.lbk``）读取器 —— **已完全解出格式**。
 -----------
 * 内存里的结构体**比文件大**：反汇编里存在对 ``[eax+0x174]`` 的读取，
   而文件只有 372 字节 —— 文件是结构体的前缀。
-* 数值字段的**业务含义**（哪个是时长、哪个是击杀）部分是推断。
-  本模块把"已确证"与"推断"分开标注：:data:`FIELDS` 里
+* ``0x54..0x88`` 统计区（狗斗 / 战役 / 任务 / 战果 / 得分）的业务含义
+  **已由联队提供的字段对照表确认**（仓库根目录 ``log.xlsx``，2026-09），
+  这批字段已正式命名并标 ``certain=True`` —— 此前它们只有偏移名
+  （``counter_54``…``counter_88``）。``0x98..0x168`` 一带的只读 u32
+  含义仍未确认，只按 ``raw_u32_*`` 原样展示。
+* 本模块把"已确证"与"推断"分开标注：:data:`FIELDS` 里
   ``certain=True`` 的字段可直接使用；推断字段一律带上偏移串，
   便于与人眼在 LogbookEditor 里对照核验。
 
@@ -103,7 +107,10 @@ class LbkError(ValueError):
 
 
 #: 解析器版本。格式理解有更新时递增，便于判断历史存档要不要重解析。
-PARSER_VERSION = "1"
+#: ``"2"``：统计区（0x54..0x88）按联队对照表（``log.xlsx``）正式命名，
+#: 旧的偏移名（``counter_54``…``counter_88`` / ``value_6c`` / ``value_70``）
+#: 由 :data:`LEGACY_FIELD_NAMES` 翻译。
+PARSER_VERSION = "2"
 
 
 # --------------------------------------------------------------------------
@@ -209,32 +216,52 @@ FIELDS: tuple[FieldSpec, ...] = (
               "03-03 起为 4，与「期间晋升」一致",
               label="军衔下标"),
 
-    # ---- 16 位计数区 ----
-    FieldSpec(0x54, "u16", "counter_54", False),
-    FieldSpec(0x56, "u16", "counter_56", False),
-    FieldSpec(0x58, "u16", "counter_58", False),
-    FieldSpec(0x5a, "u16", "counter_5a", False),
-    FieldSpec(0x5c, "u16", "counter_5c", False),
-    FieldSpec(0x5e, "u16", "counter_5e", False),
-    FieldSpec(0x60, "u16", "counter_60", False),
-    FieldSpec(0x62, "u16", "counter_62", False),
-    FieldSpec(0x64, "u16", "counter_64", False),
-    FieldSpec(0x66, "u16", "counter_66", False),
-    FieldSpec(0x68, "u16", "counter_68", False),
-    FieldSpec(0x6a, "u16", "counter_6a", False),
-    FieldSpec(0x6c, "u32", "value_6c", False, "32 位，量级像累计量而非计数"),
-    FieldSpec(0x70, "u32", "value_70", False, "32 位，量级像累计量而非计数"),
-    FieldSpec(0x74, "u16", "counter_74", False),
-    FieldSpec(0x76, "u16", "counter_76", False),
-    FieldSpec(0x78, "u16", "counter_78", False),
-    FieldSpec(0x7a, "u16", "counter_7a", False),
-    FieldSpec(0x7c, "u16", "counter_7c", False),
-    FieldSpec(0x7e, "u16", "counter_7e", False),
-    FieldSpec(0x80, "u16", "counter_80", False),
-    FieldSpec(0x82, "u16", "counter_82", False),
-    FieldSpec(0x84, "u16", "counter_84", False),
-    FieldSpec(0x86, "u16", "counter_86", False),
-    FieldSpec(0x88, "u16", "counter_88", False),
+    # ---- 统计区（0x54..0x88）----
+    #
+    # 含义由**联队提供的字段对照表**确认（仓库根目录 ``log.xlsx``，2026-09，
+    # 与公开已知的 Falcon4 Logbook 结构一致），据此从偏移名改为正式命名，
+    # 并标 ``certain=True``。旧名 → 新名的翻译见 :data:`LEGACY_FIELD_NAMES`。
+    # 其中 ``missions_flown``（执行任务数）写入名册「累计架次」
+    # （见 ``services/logbook.py::_SORTIE_FIELD_CANDIDATES``）；其余只展示，
+    # 名册没有对应列（全量数据已留在 ``parsed_json`` 里备将来使用）。
+    FieldSpec(0x54, "u16", "dogfight_wins", True, label="狗斗胜场"),
+    FieldSpec(0x56, "u16", "dogfight_losses", True, label="狗斗败场"),
+    FieldSpec(0x58, "u16", "dogfight_wins_vs_human", True,
+              label="与真人狗斗胜场"),
+    FieldSpec(0x5a, "u16", "dogfight_losses_vs_human", True,
+              label="与真人狗斗败场"),
+    FieldSpec(0x5c, "u16", "dogfight_kills", True, label="狗斗击杀数"),
+    FieldSpec(0x5e, "u16", "dogfight_deaths", True, label="狗斗被击杀数"),
+    FieldSpec(0x60, "u16", "dogfight_kills_vs_human", True,
+              label="狗斗真人飞行员击杀数"),
+    FieldSpec(0x62, "u16", "dogfight_deaths_vs_human", True,
+              label="狗斗被真人飞行员击杀数"),
+    FieldSpec(0x64, "u16", "campaigns_won", True, label="获胜战役场数"),
+    FieldSpec(0x66, "u16", "campaigns_lost", True, label="失败战役场数"),
+    FieldSpec(0x68, "u16", "campaigns_tied", True, label="僵持战役场数"),
+    FieldSpec(0x6a, "u16", "missions_flown", True,
+              "任务/架次计数：真实样本 292 任务对 296.29 飞行小时 "
+              "≈ 1.015 小时/任务，量纲吻合。写入名册「累计架次」",
+              label="执行任务数"),
+    FieldSpec(0x6c, "u32", "total_score", True, "32 位累计得分", label="总得分"),
+    FieldSpec(0x70, "u32", "mission_score", True, "32 位累计任务分",
+              label="总任务分"),
+    FieldSpec(0x74, "u16", "mission_streak", True, label="连续完成任务数"),
+    FieldSpec(0x76, "u16", "aa_kills", True,
+              "⚠️ 曾被误判为「累计架次」（时间序列巧合，见 "
+              "services/logbook.py 的口径修正说明），实际是空战击杀数",
+              label="击落敌机数"),
+    FieldSpec(0x78, "u16", "times_shot_down", True, label="被击落次数"),
+    FieldSpec(0x7a, "u16", "human_kills", True, label="真人飞行员击杀数"),
+    FieldSpec(0x7c, "u16", "killed_by_human", True,
+              label="被真人飞行员击杀次数"),
+    FieldSpec(0x7e, "u16", "suicides", True, label="自杀次数"),
+    FieldSpec(0x80, "u16", "ground_kills", True, label="地面目标击杀数"),
+    FieldSpec(0x82, "u16", "static_kills", True, label="静态目标击杀数"),
+    FieldSpec(0x84, "u16", "ship_kills", True, label="舰船击杀数"),
+    FieldSpec(0x86, "u16", "friendly_kills", True, label="误伤友军数"),
+    FieldSpec(0x88, "u16", "score_since_friendly_kill", True,
+              label="自上次误伤友军后任务得分数"),
 
     # ---- 勋章：官方界面有 6 个 "edtMedal*" 控件，正好 6 个字节 ----
     FieldSpec(0x8c, "u8", "medal_dist_fly_cross", False, "edtMedalDistFly"),
@@ -252,6 +279,37 @@ READONLY_U32 = (
     0x100, 0x10c, 0x118, 0x120, 0x124, 0x134, 0x140, 0x148, 0x150, 0x15c,
     0x160, 0x168,
 )
+
+#: 统计区旧名（偏移名，解析器 v1 及更早写在 ``parsed_json`` 里）→ 正式命名。
+#: 历史归档**重新解析之前**存的还是旧名 —— 展示层用它把旧数据翻译成新名，
+#: 避免"回填完成前页面退化成偏移名"。
+LEGACY_FIELD_NAMES: dict[str, str] = {
+    "counter_54": "dogfight_wins",
+    "counter_56": "dogfight_losses",
+    "counter_58": "dogfight_wins_vs_human",
+    "counter_5a": "dogfight_losses_vs_human",
+    "counter_5c": "dogfight_kills",
+    "counter_5e": "dogfight_deaths",
+    "counter_60": "dogfight_kills_vs_human",
+    "counter_62": "dogfight_deaths_vs_human",
+    "counter_64": "campaigns_won",
+    "counter_66": "campaigns_lost",
+    "counter_68": "campaigns_tied",
+    "counter_6a": "missions_flown",
+    "value_6c": "total_score",
+    "value_70": "mission_score",
+    "counter_74": "mission_streak",
+    "counter_76": "aa_kills",
+    "counter_78": "times_shot_down",
+    "counter_7a": "human_kills",
+    "counter_7c": "killed_by_human",
+    "counter_7e": "suicides",
+    "counter_80": "ground_kills",
+    "counter_82": "static_kills",
+    "counter_84": "ship_kills",
+    "counter_86": "friendly_kills",
+    "counter_88": "score_since_friendly_kill",
+}
 
 
 # --------------------------------------------------------------------------

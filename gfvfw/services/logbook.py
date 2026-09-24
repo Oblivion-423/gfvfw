@@ -12,9 +12,11 @@
    ``logbook_files.parse_error`` 会记下原因，页面明确告知"已归档、未解析"，
    原件仍可下载核对 —— 绝不因为解析失败而丢掉成员的文件。
    （见 ``models/identity.py::LogbookFile`` 与 requirements §8.1。）
-3. **只写已确证的字段。** 文件里还有大量含义未确认的计数器（击杀、任务数、
-   评分等），它们**只展示、不写入名册** —— 宁可少填，也不要把猜出来的
-   偏移当成事实塞进名册。见 :func:`apply_parsed`。
+3. **名册只收四个口径的字段。** 统计区（击杀、任务数、评分等）的含义
+   已按联队对照表（``log.xlsx``）确认并正式命名（见 :mod:`gfvfw.lbk_parser`），
+   但除**执行任务数 → 累计架次**外仍**只展示、不写入名册** —— 名册没有
+   对应列，全量数据留在 ``parsed_json`` 里备将来使用。
+   见 :func:`apply_parsed`。
 4. **口径不混用。** Logbook 的累计时长是**跨存档历史总量**（含本系统上线前），
    与 ACMI 统计出的架次之和不是一回事，页面上必须分别标注。
 5. **没有"审核/确认"环节。** 按联队要求 Logbook 数据保存即入库
@@ -269,21 +271,30 @@ MEDAL_FIELDS: tuple[tuple[int, str, str], ...] = (
     (0x91, "silver_star", "Silver Star"),
 )
 
-#: 架次计数所在的偏移。依据：同一人在 7 个月内该值 **+45**，
-#: 而同期飞行小时 **+44.69** —— 每小时约 1 个架次，量纲吻合。
-SORTIE_COUNT_OFFSET = 0x76
+#: 「累计架次」取自**执行任务数**（偏移 ``0x6a``，字段 ``missions_flown``）。
+#:
+#: ⚠️ **口径修正（2026-09，联队字段对照表 ``log.xlsx``）**：此前这里误把
+#: ``0x76`` 当架次 —— 当时的时间序列佐证（同一人 7 个月 +45，同期飞行小时
+#: +44.69）实为巧合，联队对照表确认 ``0x76`` 是**击落敌机数**、``0x6a`` 才是
+#: 执行任务数。真实样本交叉验证：292 任务对 296.29 飞行小时 ≈ 1.015 小时/任务，
+#: 量纲比旧口径更吻合。修正后需要用 ``scripts/reparse_logbooks.py --apply``
+#: 或页面上的「重新解析」回填历史名册（旧值是击落数，偏小）。
+MISSIONS_OFFSET = 0x6a
 
-#: ⚠️ 这个偏移在 :mod:`gfvfw.lbk_parser` 里标为 ``certain=False``
-#: （官方工具能编辑它，但我们没有一条官方代码路径点名它是"架次"），
-#: **却仍然写入名册** —— 这是全项目唯一一处"推断字段入库"的例外，
-#: 理由是它通过了时间序列交叉验证（上述 +45 对 +44.69）。
-#: 除此之外任何推断字段都不得写名册；改动这里请先补上同类证据。
-_SORTIE_FIELD_CANDIDATES = ("counter_%02x" % SORTIE_COUNT_OFFSET,)
+#: 架次取值字段：先认正式命名，再退回解析器 v1 的偏移名（历史 ``parsed_json``
+#: 里存的是旧名；重解析回填后旧名不再出现）。
+_SORTIE_FIELD_CANDIDATES = ("missions_flown",
+                            "counter_%02x" % MISSIONS_OFFSET)
 
 
 def _sortie_count(parsed: "LBP.LbkRecord") -> Optional[int]:
-    """取"累计架次"。先认显式命名（解析器将来确证后会改名），再退回偏移名。"""
-    for key in ("logbook_sorties",) + _SORTIE_FIELD_CANDIDATES:
+    """取"累计架次"（= Logbook 的**执行任务数**，一次任务计一架次）。
+
+    先认正式命名（联队对照表确认后解析器已改名 ``missions_flown``），
+    再退回偏移名 ``counter_6a`` —— 后者只出现在**尚未重解析**的历史
+    ``parsed_json`` 里（那条路径按旧名取值，语义相同）。
+    """
+    for key in _SORTIE_FIELD_CANDIDATES:
         val = parsed.fields.get(key)
         if isinstance(val, int) and val > 0:
             return val

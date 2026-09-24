@@ -89,6 +89,7 @@
         <td>
           {% if member.logbook_sorties is not none %}
             {{ member.logbook_sorties }}
+            <span class="muted small">（取自文件里的「执行任务数」）</span>
           {% else %}<span class="muted">未登记</span>{% endif %}
         </td>
       </tr>
@@ -213,6 +214,38 @@
     文件里的呼号与名册不一致时，页面上方会给出提示。
   </p>
 
+  {# ---- 战果统计（含义已按联队对照表确认） ---- #}
+  <h3>战果统计</h3>
+  <p class="small muted" style="margin:-4px 0 8px">
+    这批统计项（0x54..0x88 一带）的含义已按<strong>联队提供的字段对照表</strong>
+    （<code>log.xlsx</code>）确认并正式命名。其中「执行任务数」写入名册的
+    <strong>累计架次</strong>（一次任务计一架次）；其余只展示 ——
+    名册未设对应列，全量数据随归档保存在解析结果里，将来要用随时可取。
+  </p>
+  {% for g in parsed.stats %}
+  {% if g.rows %}
+  <table style="{% if not loop.first %}margin-top:10px{% endif %}">
+    <thead>
+      <tr><th style="width:220px">{{ g.title }}</th><th>值</th>
+          <th style="width:150px">文件偏移</th></tr>
+    </thead>
+    <tbody>
+      {% for f in g.rows %}
+      <tr>
+        <td>{{ f.label }}
+          {% if f.name == 'missions_flown' %}
+            <span class="badge ok">→ 名册累计架次</span>
+          {% endif %}
+          <br><span class="mono small muted">{{ f.name }}</span></td>
+        <td>{{ f.value if f.value is not none else '—' }}</td>
+        <td class="mono small">0x{{ '%02x' % f.offset }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endfor %}
+
   {# ---- 勋章 ---- #}
   <h3>勋章（文件里的 6 个字节）</h3>
   <table>
@@ -257,11 +290,12 @@
       </tbody>
     </table>
     <p class="small muted" style="margin:8px 0 0">
-      这些是官方工具能编辑、或结构里存在、但<strong>我们尚未确认业务含义</strong>的统计项
-      （击杀、任务数、评分等），也包括
-      <code>raw_u32_*</code> 这类只读 32 位值。
+      这些是结构里存在、但<strong>我们尚未确认业务含义</strong>的项，
+      以 <code>raw_u32_*</code> 这类只读 32 位值为主
+      （也含个别仍属推断的字段，例如「中队（待核对）」）。
       它们<strong>只展示、不写入名册</strong>，避免把猜的标签当成事实。
-      如果你在 LogbookEditor 里对照出哪一项是什么，告诉我即可补上映射 ——
+      0x54..0x88 一带的统计项已按联队对照表命名，见上方「战果统计」；
+      如果你在 LogbookEditor 里又对照出哪一项是什么，告诉我即可补上映射 ——
       已归档的文件用「重新解析」就能回填，无需重传。
     </p>
   </details>

@@ -127,7 +127,7 @@ def main() -> int:
                 print("  改后（预览）：军衔=%s 累计=%-10s 架次=%s 勋章=%s" % (
                     parsed.rank_code or "—",
                     "%.2f h" % (parsed.flight_hours or 0.0),
-                    parsed.fields.get("counter_76"),
+                    parsed.fields.get("missions_flown"),
                     parsed.medals or "无"))
                 n_ok += 1
                 continue

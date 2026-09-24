@@ -53,9 +53,14 @@ MEDALS_ALL_ZERO = (0x8c, 0x8d, 0x8e, 0x8f, 0x90, 0x91)
 def build_lbk(*, name: str = "Joe Pilot", callsign: str = "Oblivion",
               squadron: str = "GFVFW", date: str = "09/22/26",
               hours: float = 296.29, rank_index: int = 4,
-              ace_factor: float = 1.0, sorties: int = 161,
-              medals: dict[int, int] | None = None) -> bytes:
-    """造一份 372 字节、校验通过的 ``.lbk``。"""
+              ace_factor: float = 1.0, missions: int = 161,
+              aa_kills: int = 0, medals: dict[int, int] | None = None) -> bytes:
+    """造一份 372 字节、校验通过的 ``.lbk``。
+
+    ``missions`` 写入 0x6a「执行任务数」（名册累计架次的来源），
+    ``aa_kills`` 写入 0x76「击落敌机数」—— 两者分开给值，
+    用来守住"击落数不得被当成架次"的回归（2026-09 口径修正）。
+    """
     plain = bytearray(LBP.FILE_SIZE)
 
     def put_str(off: int, text: str, maxlen: int) -> None:
@@ -69,7 +74,8 @@ def build_lbk(*, name: str = "Joe Pilot", callsign: str = "Oblivion",
     struct.pack_into("<f", plain, 0x48, hours)
     struct.pack_into("<f", plain, 0x4c, ace_factor)
     struct.pack_into("<I", plain, 0x50, rank_index)
-    struct.pack_into("<H", plain, 0x76, sorties)
+    struct.pack_into("<H", plain, 0x6a, missions)
+    struct.pack_into("<H", plain, 0x76, aa_kills)
     for off, val in (medals or {}).items():
         plain[off] = val
     # 0x170 的哨兵保持 0（官方读取器的校验条件）
@@ -198,10 +204,39 @@ def main() -> int:
                 check("★ 军衔下标解析正确", rec.fields.get("rank_index") == 4)
                 check("★ 军衔码映射正确", rec.rank_code == "Lieutenant colonel",
                       repr(rec.rank_code))
-                check("★ 累计架次（偏移 0x76）解析正确",
-                      rec.fields.get("counter_76") == 161)
+                check("★ 执行任务数（偏移 0x6a）解析正确",
+                      rec.fields.get("missions_flown") == 161,
+                      str(rec.fields.get("missions_flown")))
+                check("★ 击落敌机数（偏移 0x76）解析正确",
+                      rec.fields.get("aa_kills") == 0,
+                      str(rec.fields.get("aa_kills")))
                 check("ace_factor 解析正确",
                       abs(rec.fields.get("ace_factor") - 1.0) < 1e-6)
+
+                # ---- 联队对照表（log.xlsx）落地：命名 / label / 旧名翻译 ----
+                names = {s.name for s in LBP.FIELDS}
+                renamed = set(LBP.LEGACY_FIELD_NAMES.values())
+                check("★ 统计区 25 个字段已按对照表命名并全部确证",
+                      not any(s.name.startswith(("counter_", "value_"))
+                              for s in LBP.FIELDS)
+                      and len(LBP.LEGACY_FIELD_NAMES) == 25
+                      and all(s.certain for s in LBP.FIELDS
+                              if s.name in renamed),
+                      str(sorted(LBP.LEGACY_FIELD_NAMES)))
+                check("★ 已确证字段都有可读 label",
+                      all(s.label for s in LBP.FIELDS if s.certain),
+                      str([s.name for s in LBP.FIELDS if s.certain and not s.label]))
+                check("★ 旧名 → 新名映射的值都是现存字段名",
+                      set(LBP.LEGACY_FIELD_NAMES.values()) <= names,
+                      str(set(LBP.LEGACY_FIELD_NAMES.values()) - names))
+                check("★ 旧名不再作为现行字段名出现",
+                      not (set(LBP.LEGACY_FIELD_NAMES) & names),
+                      str(set(LBP.LEGACY_FIELD_NAMES) & names))
+                check("★ 统计字段不再进 uncertain（对照表确认前会进）",
+                      not (renamed & set(rec.uncertain)),
+                      str(rec.uncertain))
+                check("★ 解析器版本已升到 2（对照表命名）",
+                      LBP.PARSER_VERSION == "2", LBP.PARSER_VERSION)
 
                 # 长文件名的边界：旧的 7 字节呼号长度把 Oblivion 截成了 Oblivio
                 long_cs = build_lbk(callsign="Bartholomew")
@@ -329,12 +364,25 @@ def main() -> int:
                 check("★ 累计飞行时长已自动写入（296.29h）",
                       m.logbook_hours_seconds == int(round(296.29 * 3600)),
                       str(m.logbook_hours_seconds))
-                check("★ 累计架次已自动写入（161）", m.logbook_sorties == 161,
+                check("★ 累计架次已自动写入（161，来自「执行任务数」0x6a）",
+                      m.logbook_sorties == 161,
                       str(m.logbook_sorties))
                 check("登记时间已记录", m.logbook_updated_at is not None)
                 check("登记人已记录", m.logbook_updated_by == mem_uid)
                 check("归档标为已写入名册", rec.is_confirmed)
                 check("写入时刻已记录", rec.confirmed_at is not None)
+
+                # ---- 回归：击落敌机数（0x76）绝不能再被当成架次 ----
+                # 口径修正前（2026-09），架次误取 0x76；对照表确认它是击落数。
+                # 这里两值故意拉开（50 对 999），用错任何一个偏移都会暴露。
+                sep = build_lbk(callsign="Viper", hours=100.0,
+                                missions=50, aa_kills=999)
+                p = write_lbk(tdp, "sep.lbk", sep)
+                LB.store_upload(db, cmd_mid, "sep.lbk", p, uploaded_by=cmd_uid)
+                db.commit()
+                check("★ 击落敌机数不再被当成累计架次（0x6a 才是）",
+                      db.get(Member, cmd_mid).logbook_sorties == 50,
+                      str(db.get(Member, cmd_mid).logbook_sorties))
 
                 quals = {q.qualification_id: q for q in db.scalars(
                     select(MemberQualification)
@@ -346,7 +394,7 @@ def main() -> int:
             print("\n[3] 勋章：按文件字节同步，只增不撤")
             with TestSession() as db:
                 medals = {0x8c: 2, 0x8e: 1, 0x8f: 8, 0x90: 2}
-                raw = build_lbk(medals=medals, hours=300.0, sorties=165)
+                raw = build_lbk(medals=medals, hours=300.0, missions=165)
                 p = write_lbk(tdp, "medals.lbk", raw)
                 rec, warn, st = LB.store_upload(db, owner_mid, "medals.lbk", p,
                                                 uploaded_by=owner_uid)
@@ -368,7 +416,7 @@ def main() -> int:
                       "silver_star" not in awards, str(sorted(awards)))
 
                 # 换一份"勋章变少"的文件：已获得的不撤销
-                raw2 = build_lbk(medals={0x8e: 1}, hours=310.0, sorties=170)
+                raw2 = build_lbk(medals={0x8e: 1}, hours=310.0, missions=170)
                 p2 = write_lbk(tdp, "medals2.lbk", raw2)
                 LB.store_upload(db, owner_mid, "medals2.lbk", p2,
                                 uploaded_by=owner_uid)
@@ -382,7 +430,7 @@ def main() -> int:
             with TestSession() as db:
                 # Oblivion 的成员目录里放"不是他的呼号"的文件
                 other = build_lbk(callsign="SomeoneElse", hours=120.0,
-                                  sorties=44, rank_index=1)
+                                  missions=44, rank_index=1)
                 p = write_lbk(tdp, "wrong.lbk", other)
                 rec_w, warn_w, st_w = LB.store_upload(
                     db, owner_mid, "wrong.lbk", p, uploaded_by=owner_uid)
@@ -397,7 +445,7 @@ def main() -> int:
                       any("已自动填入名册" in w for w in warn_w), str(warn_w))
 
                 # 呼号一致时不该有多余提示
-                same = build_lbk(callsign="Oblivion", hours=130.0, sorties=48)
+                same = build_lbk(callsign="Oblivion", hours=130.0, missions=48)
                 p2 = write_lbk(tdp, "right.lbk", same)
                 _, warn_r, _ = LB.store_upload(db, owner_mid, "right.lbk", p2,
                                                uploaded_by=owner_uid)
@@ -466,6 +514,14 @@ def main() -> int:
                 check("★ 页面展示飞行小时", "296.29" in r.text
                       or "flight_hours" in r.text)
                 check("★ 页面展示勋章区", "勋章" in r.text)
+                check("★ 页面展示战果统计分组（联队对照表命名）",
+                      "战果统计" in r.text and "狗斗记录" in r.text
+                      and "空战战果" in r.text and "对地与海上战果" in r.text,
+                      "缺少分组标题")
+                check("★ 战果统计展示执行任务数与击落敌机数",
+                      "执行任务数" in r.text and "击落敌机数" in r.text)
+                check("★ 架次来源标注为「执行任务数」",
+                      "取自文件里的「执行任务数」" in r.text)
                 check("★ 未确认的数值折叠且标注含义未确认",
                       "含义未确认" in r.text and "<details" in r.text)
                 check("★ 明确说明推断字段不写入名册",
@@ -549,7 +605,7 @@ def main() -> int:
                 page = client.get("/account/logbook")
                 tok = csrf_of(page.text)
                 # 一份"新数据"：小时与架次都比当前名册大
-                new_raw = build_lbk(hours=350.5, rank_index=5, sorties=190,
+                new_raw = build_lbk(hours=350.5, rank_index=5, missions=190, aa_kills=230,
                                     medals={0x8e: 3})
                 r = client.post("/account/logbook/upload",
                                 files={"file": ("Rookie.lbk", new_raw)},
@@ -569,6 +625,8 @@ def main() -> int:
                           str(m.logbook_hours_seconds))
                     check("★ 名册累计架次已更新", m.logbook_sorties == 190,
                           str(m.logbook_sorties))
+                    check("★ 击落敌机数（0x76=230）没有混进架次",
+                          m.logbook_sorties != 230)
                     r5 = db.scalar(select(Rank).where(Rank.level == 6))
                     check("★ 名册军衔已晋升到 6 级（index 5）",
                           m.rank_id == r5.id, str(m.rank_id))

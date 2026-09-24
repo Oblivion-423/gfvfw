@@ -115,11 +115,39 @@ def _flash_from_query(request: Request) -> dict:
     }
 
 
+#: 战果统计的分组展示：(分组键, 标题, 字段名元组)。
+#: 字段名与显示名来自 :data:`gfvfw.lbk_parser.FIELDS` —— 含义按联队提供的
+#: 字段对照表（仓库根目录 ``log.xlsx``，2026-09）确认。
+_STAT_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("campaign", "战役与任务",
+     ("missions_flown", "mission_streak",
+      "campaigns_won", "campaigns_lost", "campaigns_tied",
+      "total_score", "mission_score", "score_since_friendly_kill")),
+    ("air", "空战战果",
+     ("aa_kills", "times_shot_down", "human_kills", "killed_by_human",
+      "suicides")),
+    ("ground", "对地与海上战果",
+     ("ground_kills", "static_kills", "ship_kills", "friendly_kills")),
+    ("dogfight", "狗斗记录",
+     ("dogfight_wins", "dogfight_losses",
+      "dogfight_wins_vs_human", "dogfight_losses_vs_human",
+      "dogfight_kills", "dogfight_deaths",
+      "dogfight_kills_vs_human", "dogfight_deaths_vs_human")),
+)
+
+_STAT_NAMES = {n for _, _, names in _STAT_GROUPS for n in names}
+
+
 def _parsed_view(rec) -> dict | None:
     """把 ``parsed_json`` 整理成模板好用的结构。
 
-    分三块呈现，**已确证与推断分开**，避免把猜出来的偏移当成事实展示：
-    ``certain`` / ``medals`` / ``others``。
+    分四块呈现，**已确证与推断分开**，避免把猜出来的偏移当成事实展示：
+    ``certain``（写入名册的核心字段）/ ``stats``（战果统计，含义已按联队
+    对照表确认）/ ``medals`` / ``others``（含义仍未确认，折叠展示）。
+
+    历史归档在「重新解析」回填之前，``parsed_json`` 里存的还是解析器 v1 的
+    偏移名（``counter_54``…）—— 这里统一用 :data:`LBP.LEGACY_FIELD_NAMES`
+    翻译成正式命名后再分组，页面不会因为没回填而退化成偏移名。
     """
     import json as _json
 
@@ -131,12 +159,22 @@ def _parsed_view(rec) -> dict | None:
         data = _json.loads(rec.parsed_json)
     except ValueError:
         return None
-    fields = data.get("fields") or {}
-    certain_names = set(data.get("certain") or [])
+    fields = {LBP.LEGACY_FIELD_NAMES.get(k, k): v
+              for k, v in (data.get("fields") or {}).items()}
+    certain_names = {LBP.LEGACY_FIELD_NAMES.get(n, n)
+                     for n in (data.get("certain") or [])}
 
     certain = [{"name": s.name, "label": s.label or s.name, "offset": s.offset,
                 "note": s.note, "value": fields.get(s.name)}
-               for s in LBP.FIELDS if s.certain]
+               for s in LBP.FIELDS
+               if s.certain and s.name not in _STAT_NAMES]
+    spec_by_name = {s.name: s for s in LBP.FIELDS}
+    stats = [{"key": key, "title": title,
+              "rows": [{"name": n, "label": spec_by_name[n].label or n,
+                        "offset": spec_by_name[n].offset,
+                        "value": fields.get(n)}
+                       for n in names if n in spec_by_name]}
+             for key, title, names in _STAT_GROUPS]
     medals = [{"offset": off, "code": code, "label": label,
                "value": fields.get("medal_%s" % code)}
               for off, code, label in LB.MEDAL_FIELDS]
@@ -154,8 +192,10 @@ def _parsed_view(rec) -> dict | None:
 
     others = [{"name": _label(k), "key": k, "value": v}
               for k, v in sorted(fields.items())
-              if k not in certain_names and not k.startswith("medal_")]
-    return {"certain": certain, "medals": medals, "others": others,
+              if k not in certain_names and not k.startswith("medal_")
+              and k not in _STAT_NAMES]
+    return {"certain": certain, "stats": stats, "medals": medals,
+            "others": others,
             "warnings": data.get("warnings") or [],
             "rank_code": fields.get("rank_index") is not None
             and LBP.RANKS[fields["rank_index"]]
