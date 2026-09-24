@@ -736,6 +736,38 @@ def main() -> int:
                       len({(r.member_id, r.code) for r in rows}) == len(rows))
                 check("所有勋章都有可读名称",
                       all(r.name for r in rows))
+
+            print("\n[14] 成员详情页内嵌 Logbook 数据（纯数据，无偏移无注释）")
+            with TestClient(app) as client:
+                check("普通成员登录", login(client, "rookie"))
+                r = client.get("/members/%s" % mem_mid)
+                check("成员详情页 200", r.status_code == 200,
+                      "得到 %d" % r.status_code)
+                check("★ 详情页直接展示「Logbook 数据」面板（无需进管理页）",
+                      "Logbook 数据" in r.text, "缺少面板标题")
+                check("★ 展示累计架次（[8] 上传的 190）",
+                      "累计架次" in r.text and "190" in r.text)
+                check("★ 展示战果统计四个分组",
+                      all(k in r.text for k in
+                          ("战役与任务", "空战战果", "对地与海上战果", "狗斗记录")),
+                      "缺少分组标题")
+                check("★ 展示执行任务数与击落敌机数",
+                      "执行任务数" in r.text and "击落敌机数" in r.text)
+                check("★ 击落敌机数 230（0x76）作为数据上屏",
+                      "230" in r.text)
+                check("★ 勋章直接展示（Air Medal ×3）", "Air Medal" in r.text)
+                check("★ 不显示文件偏移", "0x" not in r.text)
+                check("★ 不显示「含义未确认」/「推断」/「待核对」等注释",
+                      "含义未确认" not in r.text and "推断" not in r.text
+                      and "待核对" not in r.text)
+                check("★ 档案里旧的「Logbook 累计」行已并入面板",
+                      "Logbook 累计" not in r.text)
+                # 没有归档的成员不显示面板（不能渲染出一个空壳）
+                # （owner 也有解析成功的归档；教官成员从未上传过 → 用他验证）
+                r = client.get("/members/%s" % ins_mid)
+                check("★ 无解析数据的成员不显示该面板",
+                      "Logbook 数据" not in r.text)
+
         finally:
             import gfvfw.config as _c
             import gfvfw.db as _d

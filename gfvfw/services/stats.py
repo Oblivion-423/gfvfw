@@ -322,10 +322,15 @@ def overview(db: Session) -> dict:
         .where(AcmiFile.parse_status == "failed")) or 0
 
     return {
-        "members_total": cnt(Member),
+        # ⚠️ 成员计数必须**排除已作废**（deleted_at 非空）——「系统状态」是
+        #    公开页面，不能把作废呼号记进去。现役同理：作废只标 deleted_at、
+        #    不改成员 status，所以 active 计数也必须带上这个过滤。
+        "members_total": db.scalar(
+            select(func.count()).select_from(Member)
+            .where(Member.deleted_at.is_(None))) or 0,
         "members_active": db.scalar(
             select(func.count()).select_from(Member)
-            .where(Member.status == "active")) or 0,
+            .where(Member.deleted_at.is_(None), Member.status == "active")) or 0,
         "missions": cnt(Mission),
         "sorties": cnt(Sortie),
         "acmi_files": cnt(AcmiFile),

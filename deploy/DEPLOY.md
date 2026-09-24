@@ -1082,8 +1082,8 @@ sudo -u gfvfw .venv/bin/python scripts/reparse_logbooks.py --apply    # 写入
 | 删传错的 `.cam` 存档 | 战役管理 → 存档页 →「删除」 | `campaign.manage` |
 | **作废一个战役**（建错了/不办了） | **战役管理**（顶栏那一项）列表行右侧「作废」，或该战役详情页底部「危险操作」 | `campaign.manage`（教官/指挥/owner） |
 | **恢复被作废的战役** | 战役管理 →「显示已作废」→「恢复」 | `campaign.manage` |
-| **作废一个名册成员**（人走了） | 成员详情 → 底部「账号与危险操作」→「作废此成员」 | `member.delete`（指挥/owner） |
-| **恢复被作废的成员** | 名册 →「显示已作废」→「恢复」 | `member.delete` |
+| **作废一个名册成员**（人走了） | 成员详情 → 底部「账号与危险操作」→「作废此成员」 | `member.void`（**仅超管**） |
+| **恢复被作废的成员** | 名册 →「显示已作废」→「恢复」 | `member.void`（**仅超管**） |
 | **把账号从成员上解绑**（绑错了/要收回访问权） | 成员详情 →「账号与危险操作」→「解绑该账号」 | `member.delete` |
 | 上传/更换 Logbook | 账号页 →「我的 Logbook」 | `logbook.upload`（自己的） |
 | 代成员上传 Logbook | 成员档案 →「Logbook」 | `logbook.upload.any`（教官/指挥） |

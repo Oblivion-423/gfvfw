@@ -26,10 +26,15 @@ def home(request: Request,
     # 只给「飞行员累计」会让单个任务看起来比实际长 N 倍。见 services/stats.py。
     ov = overview(db)
 
+    # ⚠️ 成员计数排除已作废（deleted_at 非空）——作废呼号不得进「系统状态」。
+    #    作废只标 deleted_at、不改 status，所以 active 计数同样要过滤。
     stats = {
-        "members_total": count(Member),
+        "members_total": db.scalar(
+            select(func.count()).select_from(Member)
+            .where(Member.deleted_at.is_(None))) or 0,
         "members_active": db.scalar(
-            select(func.count()).select_from(Member).where(Member.status == "active")) or 0,
+            select(func.count()).select_from(Member)
+            .where(Member.deleted_at.is_(None), Member.status == "active")) or 0,
         "missions": count(Mission),
         "sorties": count(Sortie),
         "acmi_files": count(AcmiFile),

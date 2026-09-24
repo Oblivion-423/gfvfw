@@ -307,11 +307,14 @@ def main() -> int:
         dur_txt = filter_duration(m["logbook_hours_seconds"])
         r = client.get("/members/%s" % member_id)
         check("成员详情页 200", r.status_code == 200, "status=%d" % r.status_code)
-        # ⚠️ 详情页用 dur 过滤器渲染（"296小时17分"），不是 "296.29"
+        # ⚠️ 详情页的「Logbook 数据」面板用 dur 过滤器渲染（"296小时17分"）
         check("★ 成员详情页显示 Logbook 累计时长（%s）" % dur_txt,
               dur_txt in r.text, "期望 %s" % dur_txt)
         check("★ 成员详情页标注来源 Logbook", "来源 Logbook" in r.text)
-        check("★ 成员详情页显示架次", "%s 架次" % m["logbook_sorties"] in r.text)
+        check("★ 成员详情页显示累计架次（%s）" % m["logbook_sorties"],
+              "累计架次" in r.text and str(m["logbook_sorties"]) in r.text)
+        check("★ 详情页内嵌 Logbook 数据面板且不显示偏移",
+              "Logbook 数据" in r.text and "0x" not in r.text)
         for path in ("/members", "/", "/stats"):
             r = client.get(path)
             check("GET %s 200" % path, r.status_code == 200,

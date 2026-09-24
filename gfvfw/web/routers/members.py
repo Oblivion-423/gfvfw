@@ -35,7 +35,7 @@ from ...models import (
 from ...models.identity import USER_STATUS_LABELS
 from ...permissions import (
     LOGBOOK_UPLOAD_ANY, MEMBER_CREATE, MEMBER_DELETE, MEMBER_EDIT,
-    MEMBER_EDIT_RANK,
+    MEMBER_EDIT_RANK, MEMBER_VOID,
 )
 from ...security import verify_csrf
 from ...services import logbook as LB
@@ -131,10 +131,11 @@ def member_list(request: Request,
                 db: Session = Depends(get_db)):
     """名册列表。
 
-    ``?deleted=1`` 显示**已作废**的成员（只给有 MEMBER_DELETE 的人看）——
+    ``?deleted=1`` 显示**已作废**的成员 —— **只给超级管理员**（``MEMBER_VOID``）
+    看：联队口径下"作废呼号"的功能与界面对其他一切身份隐藏。
     没有这个视图的话，"作废"在界面上就是不可逆的，而提示里写着"可恢复"。
     """
-    show_deleted = deleted in ("1", "true", "yes") and principal.can(MEMBER_DELETE)
+    show_deleted = deleted in ("1", "true", "yes") and principal.can(MEMBER_VOID)
 
     stmt = select(Member).where(
         Member.deleted_at.is_not(None) if show_deleted else Member.deleted_at.is_(None))
@@ -175,7 +176,8 @@ def member_list(request: Request,
         "status_filter": status,
         "show_deleted": show_deleted,
         "can_manage": principal.can(MEMBER_CREATE),
-        "can_delete": principal.can(MEMBER_DELETE),
+        # 「显示已作废」开关跟视图走同一个权限点
+        "can_void": principal.can(MEMBER_VOID),
     })
 
 
@@ -273,6 +275,21 @@ def member_detail(member_id: str, request: Request,
     qualifications = [{"name": q[0], "category": q[1],
                        "granted_at": q[2], "source": q[3]} for q in quals]
 
+    # Logbook 内嵌数据：与 Logbook 页同源（最新一份**解析成功的**归档，
+    # 不是最新一份归档 —— 失败的那份另有失败面板，不该顶掉这里的数据）。
+    from .logbook import _parsed_view
+    lbk_parsed = _parsed_view(next(
+        (f for f in LB.list_for_member(db, member.id) if f.parsed_json), None))
+    if lbk_parsed:
+        certain_by_name = {c["name"]: c["value"] for c in lbk_parsed["certain"]}
+        stat_by_name = {r["name"]: r["value"]
+                        for g in lbk_parsed["stats"] for r in g["rows"]}
+        lbk_head = {"date": certain_by_name.get("date"),
+                    "ace_factor": certain_by_name.get("ace_factor"),
+                    "total_score": stat_by_name.get("total_score")}
+    else:
+        lbk_head = None
+
     return render(request, "members/detail.html", {
         **_common_context(),
         "member": member,
@@ -282,12 +299,20 @@ def member_detail(member_id: str, request: Request,
         "can_manage": principal.can(MEMBER_EDIT),
         # 登录账号（本页要显示它，并给出「解绑」入口）
         "account": _bound_account(db, member.id),
-        # 作废/解绑是同一个权限点（都能撤掉一个人的访问权）
+        # ⚠️ 两个处置分开：「解绑」归 MEMBER_DELETE（指挥也有）；
+        #    「作废」及其恢复入口归 MEMBER_VOID（**仅超级管理员**）——
+        #    除超管外，页面上不得出现任何作废相关的功能与界面。
         "can_delete": principal.can(MEMBER_DELETE),
+        "can_void": principal.can(MEMBER_VOID),
         # Logbook 归档（本页只显示摘要 + 入口，完整操作在专用页面）
         "logbook_count": len(LB.list_for_member(db, member.id)),
         "logbook_applied": LB.applied_for_member(db, member.id) is not None,
         "can_manage_logbook": principal.can(LOGBOOK_UPLOAD_ANY),
+        # Logbook 数据**内嵌展示**：取最新一份解析成功的归档，整理成纯数据视图
+        # （分组与中文标签复用 Logbook 页的视图构建；详情页只渲染值，
+        # 不渲染文件偏移与推断/口径注释 —— 管理操作仍在专用 Logbook 页）。
+        "lbk": lbk_parsed,
+        "lbk_head": lbk_head,
     })
 
 
@@ -604,9 +629,13 @@ def member_unbind_account(member_id: str, request: Request,
 @router.post("/{member_id}/delete")
 def member_delete(member_id: str, request: Request,
                   csrf_token: str = Form(""),
-                  principal: Principal = Depends(require(MEMBER_DELETE)),
+                  principal: Principal = Depends(require(MEMBER_VOID)),
                   db: Session = Depends(get_db)):
-    """作废名册成员（软删除），**并停用其绑定的登录账号**。"""
+    """作废名册成员（软删除），**并停用其绑定的登录账号**。
+
+    权限：``MEMBER_VOID``（**仅超级管理员**）—— 联队口径：作废呼号相关的
+    功能与界面对其他身份完全隐藏。
+    """
     verify_csrf(request, csrf_token)
 
     member = db.get(Member, member_id)
@@ -657,9 +686,12 @@ def member_delete(member_id: str, request: Request,
 @router.post("/{member_id}/restore")
 def member_restore(member_id: str, request: Request,
                    csrf_token: str = Form(""),
-                   principal: Principal = Depends(require(MEMBER_DELETE)),
+                   principal: Principal = Depends(require(MEMBER_VOID)),
                    db: Session = Depends(get_db)):
-    """恢复被作废的成员（并把它被停用的登录账号恢复为队员）。"""
+    """恢复被作废的成员（并把它被停用的登录账号恢复为队员）。
+
+    权限：``MEMBER_VOID``（**仅超级管理员**）—— 与作废同点。
+    """
     verify_csrf(request, csrf_token)
 
     member = db.get(Member, member_id)

@@ -21,6 +21,11 @@ MEMBER_VIEW = "member.view"
 MEMBER_CREATE = "member.create"
 MEMBER_EDIT = "member.edit"
 MEMBER_DELETE = "member.delete"
+#: 作废/恢复名册成员、查看「已作废」列表 —— **仅超级管理员（owner）**。
+#: 「作废」是连人带账号一起停权的重处置，界面上还要提供恢复入口；
+#: 联队口径：这一类"作废呼号"的功能与界面**只对超管可见**，
+#: 其余管理员（指挥等）只保留「解绑」（``member.delete``）。
+MEMBER_VOID = "member.void"
 MEMBER_EDIT_RANK = "member.rank.edit"          # 军衔/资质属敏感变更
 MEMBER_VIEW_PRIVATE = "member.private.view"    # command 层：联系方式等
 
@@ -72,8 +77,8 @@ SYSTEM_ROLE_ASSIGN = "system.role.assign"
 
 #: 全部权限点（用于校验 role_permissions 表内容合法）
 ALL_PERMISSIONS: frozenset[str] = frozenset({
-    MEMBER_VIEW, MEMBER_CREATE, MEMBER_EDIT, MEMBER_DELETE, MEMBER_EDIT_RANK,
-    MEMBER_VIEW_PRIVATE,
+    MEMBER_VIEW, MEMBER_CREATE, MEMBER_EDIT, MEMBER_DELETE, MEMBER_VOID,
+    MEMBER_EDIT_RANK, MEMBER_VIEW_PRIVATE,
     APPLICATION_REVIEW,
     LOGBOOK_UPLOAD, LOGBOOK_UPLOAD_ANY,
     LOG_VIEW, LOG_EDIT_OWN, LOG_EDIT_ANY, LOG_APPROVE, LOG_DELETE,

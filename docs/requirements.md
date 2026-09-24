@@ -601,7 +601,7 @@ FileVersion=2.1
 | ACMI 文件 | 删（**仅未归并的**） | `POST /acmi/{file_id}/delete` | 本人 `acmi.upload`；他人 `acmi.upload.any` |
 | 战役存档 | 删 | `POST /theater/{campaign_id}/saves/{save_id}/delete` | `campaign.manage` |
 | 战役 | 作废 / 恢复 | `POST /campaigns/{id}/delete` / `POST /campaigns/{id}/restore` | `campaign.manage` |
-| 名册成员 | 作废 / 恢复 | `POST /members/{id}/delete` / `POST /members/{id}/restore` | `member.delete` |
+| 名册成员 | 作废 / 恢复 | `POST /members/{id}/delete` / `POST /members/{id}/restore` | `member.void`（仅超管） |
 | 名册成员 | 账号与成员**解绑** | `POST /members/{id}/unbind` | `member.delete` |
 
 > **入口必须可见**：删除名册成员与作废战役的 handler 都早就写好了，但前者

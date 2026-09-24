@@ -571,11 +571,15 @@ def main() -> int:
                       m3 is not None and m3.campaign_id is None)
 
             # ---------------------------------------------------------------
-            print("\n[11] ★ 删除名册成员：必须同时撤掉访问权")
+            print("\n[11] ★ 删除名册成员：必须同时撤掉访问权；作废仅超管可见")
             # ---------------------------------------------------------------
             # 这条是**真实存在过的安全洞**：member_delete 只把 members 行标作废，
             # 而 deps.load_principal 不看 deleted_at ⟹ 那个账号照样加载到该成员、
             # 照样取到未撤销的角色 ⟹ **照样拥有全部权限**，导航里还显示已删的呼号。
+            # 另一条联队口径：「作废呼号」相关的功能与界面（作废按钮、恢复、
+            # 显示已作废视图、概览统计）**只对超级管理员（member.void）开放**；
+            # 指挥只保留「解绑」（member.delete）。概览「系统状态」的成员计数
+            # 也必须排除已作废，否则作废呼号还挂在公开页面上。
             with TestSession() as db:
                 doomed = Member(callsign="Doomed", status="active")
                 db.add(doomed)
@@ -601,8 +605,9 @@ def main() -> int:
                       "登录账号" in r.text and "doomed" in r.text)
                 check("★ 详情页给出「解绑该账号」按钮",
                       "/members/%s/unbind" % doomed_mid in r.text)
-                check("★ 详情页给出「作废此成员」按钮",
-                      "/members/%s/delete" % doomed_mid in r.text)
+                check("★ 指挥看不到「作废此成员」（作废仅超管，member.void）",
+                      "作废此成员" not in r.text
+                      and "/members/%s/delete" % doomed_mid not in r.text)
 
             with TestClient(app) as client:
                 login(client, "rookie")           # 普通队员：无 member.delete
@@ -621,16 +626,73 @@ def main() -> int:
                       "得到 %d" % r.status_code)
 
             with TestClient(app) as client:
-                login(client, "viper")            # commander
+                login(client, "viper")            # commander：有解绑、无作废
+                r = client.get("/members/%s" % doomed_mid)
+                check("★ 指挥仍有「解绑该账号」（member.delete）",
+                      "/members/%s/unbind" % doomed_mid in r.text)
+                check("★ 指挥看不到「作废此成员」",
+                      "作废此成员" not in r.text)
+                r = client.get("/members")
+                check("★ 指挥的名册列表没有「显示已作废」入口",
+                      "显示已作废" not in r.text)
+                r = client.get("/members?deleted=1")
+                check("★ 指挥访问 ?deleted=1 也只是普通名册（无作废视图）",
+                      "已作废的成员" not in r.text)
                 tok = csrf_of(client.get("/members/%s" % doomed_mid).text)
                 r = client.post("/members/%s/delete" % doomed_mid,
                                 data={"csrf_token": tok},
                                 follow_redirects=False)
-                check("指挥作废成员 → 303", r.status_code == 303,
+                check("★ 指挥直接 POST 作废 → 403（member.void 仅超管）",
+                      r.status_code == 403, "得到 %d" % r.status_code)
+                r = client.post("/members/%s/restore" % doomed_mid,
+                                data={"csrf_token": tok},
+                                follow_redirects=False)
+                check("★ 指挥直接 POST 恢复 → 403", r.status_code == 403,
+                      "得到 %d" % r.status_code)
+
+            with TestClient(app) as client:
+                login(client, "oblivion")         # owner：唯一的作废入口
+                # 系统状态基线：作废前名册成员数（从库中算，排除已作废）
+                with TestSession() as db:
+                    live_before = db.scalar(
+                        select(func.count()).select_from(Member)
+                        .where(Member.deleted_at.is_(None)))
+                r = client.get("/members/%s" % doomed_mid)
+                check("★ 超管的详情页有「作废此成员」",
+                      "作废此成员" in r.text)
+                tok = csrf_of(r.text)
+                r = client.post("/members/%s/delete" % doomed_mid,
+                                data={"csrf_token": tok},
+                                follow_redirects=False)
+                check("超管作废成员 → 303", r.status_code == 303,
                       "得到 %d" % r.status_code)
                 check("提示说明账号被一并停用",
                       "停用" in unquote(r.headers.get("location", "")),
                       unquote(r.headers.get("location", ""))[:160])
+
+                # ★ 系统状态不得把已作废的呼号记进去
+                r = client.get("/")
+                m_total = re.search(
+                    r'(\d+)</span>\s*<span class="k">名册成员', r.text)
+                m_active = re.search(
+                    r'(\d+)</span>\s*<span class="k">现役', r.text)
+                with TestSession() as db:
+                    live_now = db.scalar(
+                        select(func.count()).select_from(Member)
+                        .where(Member.deleted_at.is_(None)))
+                check("★ 概览「系统状态」的名册成员数排除已作废",
+                      m_total is not None and int(m_total.group(1)) == live_now,
+                      "页面=%s 库=%s" % (m_total.group(1) if m_total else "?",
+                                        live_now))
+                check("★ 概览「现役」同样排除已作废（作废不改 status，必须过滤）",
+                      m_active is not None and int(m_active.group(1)) == live_now,
+                      "页面=%s 库=%s" % (m_active.group(1) if m_active else "?",
+                                        live_now))
+                check("★ 作废前后的差值正好是 1",
+                      live_before == live_now + 1,
+                      "%s -> %s" % (live_before, live_now))
+                check("超管的名册列表没有已作废的呼号",
+                      "Doomed" not in client.get("/members").text)
 
             with TestSession() as db:
                 dm = db.get(Member, doomed_mid)
@@ -659,6 +721,9 @@ def main() -> int:
                 login(client, "viper")
                 r = client.get("/members")
                 check("★ 已作废的成员不在名册里", "Doomed" not in r.text)
+
+            with TestClient(app) as client:
+                login(client, "oblivion")         # owner：恢复入口也仅超管
                 r = client.get("/members?deleted=1")
                 check("★ 名册有「显示已作废」视图", "Doomed" in r.text)
                 check("★ 给出「恢复」按钮",
@@ -796,11 +861,12 @@ def main() -> int:
                       r.status_code == 400, "得到 %d" % r.status_code)
 
             # 自我删除防护：别把最后一个管理员自己删掉
+            # （作废是 member.void —— 能触到这道防护的只有 owner 本人）
             with TestClient(app) as client:
-                login(client, "viper")
-                r = client.post("/members/%s/delete" % cmd_mid,
+                login(client, "oblivion")
+                r = client.post("/members/%s/delete" % owner_mid,
                                 data={"csrf_token": csrf_of(
-                                    client.get("/members/%s" % cmd_mid).text)},
+                                    client.get("/members/%s" % owner_mid).text)},
                                 follow_redirects=False)
                 check("★ 不能作废自己所在的成员记录（400）",
                       r.status_code == 400, "得到 %d" % r.status_code)
@@ -839,17 +905,23 @@ def main() -> int:
                 check("（前置）当前只有 1 个能登录的 owner", n_owners == 1,
                       "得到 %s" % n_owners)
 
+            # 作废侧：唯一能作废的人就是唯一 owner 本人 —— 自我删除防护
+            # 保证了"界面上永远留得住最后一个 owner"（没有第二个人能作废）。
             with TestClient(app) as client:
-                login(client, "viper")             # commander，有 member.delete
+                login(client, "oblivion")
                 tok = csrf_of(client.get("/members/%s" % owner_mid).text)
                 r = client.post("/members/%s/delete" % owner_mid,
                                 data={"csrf_token": tok},
                                 follow_redirects=False)
-                check("★ 作废最后一个 owner → 400（否则界面再也授权不了）",
+                check("★ 最后一个 owner 作废不了自己 → 400（否则界面再也授权不了）",
                       r.status_code == 400, "得到 %d" % r.status_code)
                 check("提示让人先给别的账号授 owner",
-                      "owner" in r.text, r.text[:200])
+                      "另一个管理员" in r.text, r.text[:200])
 
+            # 解绑侧：指挥仍有 member.delete，owner-lockout 在这里真正生效
+            with TestClient(app) as client:
+                login(client, "viper")
+                tok = csrf_of(client.get("/members/%s" % owner_mid).text)
                 r = client.post("/members/%s/unbind" % owner_mid,
                                 data={"csrf_token": tok},
                                 follow_redirects=False)
@@ -858,9 +930,12 @@ def main() -> int:
 
             # 正面控制：另有一个能登录的 owner 之后，就不该再被拦
             # （guard 不能变成"owner 一律不许动"）
+            # ⚠️ 此时 oblivion 的账号已被上一条解绑（不再绑定成员、失去权限），
+            #    所以这里把 owner 也授给 Viper —— 由 Viper 来作废 Instructor。
             with TestSession() as db:
                 owner_role = db.scalar(select(Role).where(Role.code == "owner"))
                 db.add(MemberRole(member_id=ins_mid, role_id=owner_role.id))
+                db.add(MemberRole(member_id=cmd_mid, role_id=owner_role.id))
                 db.commit()
 
             with TestClient(app) as client:
@@ -876,6 +951,17 @@ def main() -> int:
                     check("★ 确实解绑了（账号降为游客）",
                           ob_u is not None and ob_u.member_id is None
                           and ob_u.status == "pending")
+
+            # 正面控制（作废侧）：另有一个能登录的 owner 之后，作废也不再被拦
+            # （guard 不能变成"owner 一律不许动"）
+            with TestClient(app) as client:
+                login(client, "viper")
+                tok = csrf_of(client.get("/members/%s" % ins_mid).text)
+                r = client.post("/members/%s/delete" % ins_mid,
+                                data={"csrf_token": tok},
+                                follow_redirects=False)
+                check("★ 另有 owner 时作废不再被拦（303）",
+                      r.status_code == 303, "得到 %d" % r.status_code)
         finally:
             import gfvfw.config as _c
             import gfvfw.db as _d
