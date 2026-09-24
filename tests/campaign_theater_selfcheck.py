@@ -39,6 +39,14 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# ⚠️ Windows 控制台默认 GBK，而这里的断言名里有 `1024²`（U+00B2）—— GBK 编不出来，
+#    print 直接抛 UnicodeEncodeError，整套自校验会以一个看不出原因的
+#    "剧场地图检查异常" 收尾（真踩过）。`★` 恰好是 GBK 里有的字，所以
+#    只有含 `²` 的那条会炸，看起来特别莫名其妙。
+#    用 reconfigure：**不要**换 TextIOWrapper，那会在中途关掉底层 buffer。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 from sqlalchemy import create_engine, func, select  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
@@ -1441,6 +1449,36 @@ def test_map_without_theater_data() -> None:
                       "%d vs %d" % (len(img.content),
                                     (maps_dir / "Hellas.png").stat().st_size))
 
+            # ── 战役管理详情页也要有「战区地图」面板 ──
+            # 联队口径的"战役管理"就是 /theater/{id}：以前只有在态势图页才看得到
+            # 底图，用户在自己天天打开的页面上看不到战区长什么样。
+            r = client.get("/theater/%s" % cid)
+            check("战役管理详情页可打开", r.status_code == 200,
+                  "得到 %d" % r.status_code)
+            d = r.text
+            check("★ 详情页有「战区地图」面板", "战区地图" in d)
+            check("★ 详情页面板里真的有底图 <img>",
+                  re.search(r'<img[^>]*src="/theater/%s/map/image/\d+"' % cid, d)
+                  is not None, "面板里没有 <img> —— 图没出来")
+            # ⚠️ 这两条是**实测**结论，不是风格偏好。同一张 4096² 底图、同一窗口
+            #    截图：裸 <img> 1 548 410 字节（画出来了）；loading="lazy" 对
+            #    视口外的图根本不取；decoding="async" 只有 10 144 字节且整页
+            #    没有亮像素 —— 解码被推到布局之后，先画出一个**空框**。
+            #    "底图不显示"是联队报过的故障，不能再自己造一次。
+            check("★ 底图不是 loading=lazy（视口外懒加载不取，只剩空框）",
+                  'loading="lazy"' not in d)
+            check("★ 底图不是 decoding=async（解码被推后，先画空框）",
+                  'decoding="async"' not in d)
+            check("面板可切换其它底图", 'href="/theater/%s?map=' % cid in d)
+            check("面板有「不显示」开关", 'href="/theater/%s?map=none"' % cid in d)
+            check("面板可进完整态势图", 'href="/theater/%s/map?map=' % cid in d)
+
+            r = client.get("/theater/%s?map=none" % cid)
+            check("详情页 ?map=none 可打开", r.status_code == 200)
+            check("?map=none 时不再输出底图", "/map/image/" not in r.text)
+            check("?map=none 说明是「关掉的」而不是「没配」",
+                  "底图已关闭" in r.text)
+
             # 一张图都没有时，页面必须给出可操作的说明
             cfg.settings.bms_map_dir = tmp / "nowhere"
             r2 = client.get("/theater/%s/map" % cid)
@@ -1449,6 +1487,15 @@ def test_map_without_theater_data() -> None:
             check("★ 空状态给出具体动作（放哪张图/怎么重启）",
                   ("_4K" in r2.text or "正方形" in r2.text))
             check("空状态不含 <image>", "<image" not in r2.text)
+
+            # 同一份说明必须**两个页面都有** —— 它抽成了 theater/_map_missing.html
+            # 由两页共用；抽错了只会在一页上炸，所以两页都要查。
+            r3 = client.get("/theater/%s" % cid)
+            check("没底图时详情页仍可打开（不崩）", r3.status_code == 200)
+            check("★ 空状态说明在详情页也存在（共用 partial 没抽错）",
+                  "GFVFW_BMS_MAP_DIR" in r3.text
+                  and ("_4K" in r3.text or "正方形" in r3.text))
+            check("没底图时详情页不含底图 <img>", "/map/image/" not in r3.text)
     finally:
         (dbmod.SessionLocal, deps.SessionLocal, appmod.SessionLocal,
          cfg.settings.storage_dir, cfg.settings.bms_map_dir,

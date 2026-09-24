@@ -383,6 +383,9 @@ def theater_detail(campaign_id: str, request: Request,
             select(CampaignEvent).where(CampaignEvent.save_id == ov.save.id)
             .order_by(CampaignEvent.at_campaign_time_ms.desc())))
         ctx["warnings"] = json.loads(ov.save.parse_warnings_json or "[]")
+        # 「战区地图」面板：战役管理里也要能直接看到战区底图。
+        # 只放**一张**（7~15 MB）；列表页每行一张会把首屏拖成几十 MB。
+        ctx.update(_map_ctx(request, ov.save))
     return render(request, "theater/detail.html", ctx)
 
 
@@ -428,29 +431,7 @@ def theater_map(campaign_id: str, request: Request,
     sam_threat = _sam_threat_for(db, sv)
     tctx = _theater_context(sv)
 
-    # ── 剧场地图底图 ──────────────────────────────────────────────
-    # 地图按**体积升序**列出，默认取最小的 4K 图：底图是页面首次加载的
-    # 主要成本（Hellas 16K 有 768 MB），不该拿最大那张当默认值。
-    map_disc = _maps_discovery(sv)
-    maps = map_disc.maps
-    default_map = pick_default_map(maps)
-    sel_map = None
-    map_idx_param = request.query_params.get("map")
-    if map_idx_param is not None:
-        if map_idx_param == "none":
-            sel_map = None                      # 显式关掉底图
-        else:
-            try:
-                i = int(map_idx_param)
-                if 0 <= i < len(maps):
-                    sel_map = maps[i]
-            except ValueError:
-                pass
-    elif default_map is not None:
-        sel_map = default_map
-    sel_idx = maps.index(sel_map) if sel_map in maps else -1
-
-    return render(request, "theater/map.html", {
+    ctx = {
         "campaign": camp, "save": sv,
         "latest": sv,
         "objectives": shown, "all_count": len(objectives),
@@ -469,15 +450,65 @@ def theater_map(campaign_id: str, request: Request,
         "theater_root": tctx.get("theater_root"),
         "projection": tctx.get("projection"),
         "grid_center_latlon": tctx.get("grid_center_latlon"),
+    }
+    # 剧场地图底图（与战役管理详情页共用同一套选择逻辑）
+    ctx.update(_map_ctx(request, sv))
+    return render(request, "theater/map.html", ctx)
+
+
+def _pick_map(request: Request, sv: CampaignSave):
+    """按 ``?map=`` 选出要用的剧场底图。
+
+    返回 ``(disc, maps, sel_map, sel_idx, default_map, off)``。
+
+    抽出来是因为**两个页面**都要用：态势图（``/map``）与
+    战役管理详情页的「战区地图」面板。各写一份必然慢慢不一致。
+
+    * ``?map=none``  → 显式关掉底图（``off=True``）
+    * ``?map=<i>``   → 取第 i 张；越界或非数字则当作"没指定"
+    * 没指定         → 取默认（``default_map``，即**体积最小的 4K**）
+
+    地图按**体积升序**列出：底图是页面首次加载的主要成本（Hellas 16K 有
+    768 MB），不该拿最大那张当默认值。
+    """
+    disc = _maps_discovery(sv)
+    maps = disc.maps
+    default_map = pick_default_map(maps)
+    sel_map = None
+    param = request.query_params.get("map")
+    if param is not None:
+        if param == "none":
+            sel_map = None                      # 显式关掉底图
+        else:
+            try:
+                i = int(param)
+                if 0 <= i < len(maps):
+                    sel_map = maps[i]
+            except ValueError:
+                pass
+    elif default_map is not None:
+        sel_map = default_map
+    sel_idx = maps.index(sel_map) if sel_map in maps else -1
+    return disc, maps, sel_map, sel_idx, default_map, param == "none"
+
+
+def _map_ctx(request: Request, sv: CampaignSave) -> dict:
+    """底图相关的模板上下文（态势图与战役管理共用）。
+
+    ``default_map`` 一并传出去，是为了让模板能把"当前这张"与"默认那张"
+    区分开（`pick_default_map` 只算一次，不在两处各算一遍）。
+    """
+    disc, maps, sel_map, sel_idx, default_map, off = _pick_map(request, sv)
+    return {
         "maps": maps,
-        "map_disc": map_disc,
+        "map_disc": disc,
         "map_dir_setting": MAP_DIR_SETTING_HINT,
         "map_dir_value": str(settings.bms_map_dir) if settings.bms_map_dir else None,
         "sel_map": sel_map,
         "sel_map_idx": sel_idx,
         "default_map": default_map,
-        "maps_off": map_idx_param == "none",
-    })
+        "maps_off": off,
+    }
 
 
 def _file_etag(st) -> str:

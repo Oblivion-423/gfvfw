@@ -42,11 +42,13 @@
 （`.venv\Scripts\python.exe -m pytest -q` → 12 passed）
 > 里面 **1 组会跳过**：战役管理的「与 `campaign_state.json` 对拍」需要真实存档，
 > 设 `GFVFW_TEST_CAM` 与 `GFVFW_TEST_STATE_JSON` 指向配套的 `.cam` 与 CamReader 输出即可跑满。
-> 12 个套件相加正好 1354
-> （65+36+96+105+88+61+82+252+134+58+132+245），与 `pytest` 一致。
+> 12 个套件相加正好 1368
+> （65+36+96+105+88+61+82+266+134+58+132+245），与 `pytest` 一致。
 > 另有几个独立核对脚本不计入：`scripts/preflight.py`（46 项）、
-> `scripts/verify_png_pipeline.py`（22 项）、`scripts/live_edit_check.py`（121 项，
-> 对着运行中的服务跑）、`scripts/template_context_audit.py`（模板开关 × 路由上下文）。
+> `scripts/verify_png_pipeline.py`（18 项）、`scripts/live_edit_check.py`（121 项，
+> 对着运行中的服务跑）、`scripts/map_in_campaign_probe.py`（41 项，对着运行中的
+> 服务跑，核对「战区地图」面板，需要一台有底图的与一台没有底图的服务）、
+> `scripts/template_context_audit.py`（模板开关 × 路由上下文）。
 
 ---
 
@@ -755,8 +757,17 @@ scripts/              开发期工具（不参与线上流程）
   verify_png_pipeline.py  ★ 核对上面那个手写 PNG 管线：5 种 scanline 过滤器
                         还原、编码/解码逐字节往返、通道顺序、面积平均、
                         真实地图降采样后平均色偏差（**"跑通了"不等于"画面对"**）
-  map_preview_dump.py   ★ 把真实渲染的态势图存成离线可截图的预览页
-                        （底图内联成 data URI），用来肉眼确认底图真的出来了
+  map_preview_dump.py   ★ 把真实渲染的页面存成离线可截图的预览页，用来肉眼确认
+                        底图真的出来了。`--page detail` 出战役管理详情页，
+                        默认出态势图。⚠️ 底图**不要**内联成 data URI ——
+                        实测 10 MB 的属性在无头 Chrome 里根本画不出来，
+                        会被误判成"面板没出来"；现在是把 PNG 写在预览页旁边
+                        用相对路径引用
+  map_in_campaign_probe.py  ★ 真实 HTTP 两段核对「战区地图」面板：A 段（有底图）
+                        查详情页面板、`<img>` 路由 200/PNG 魔数/体积/强缓存、
+                        `?map=none` 与 `?map=<i>` 真的生效，**并回归态势图没被
+                        改坏**；B 段（无底图服务器）查**两个页面**都出现了共用的
+                        缺图说明（抽 partial 抽错了只会在一页上炸）
   theater_delete_probe.py  ★ 在**战役管理（/theater）**里走一遍"作废 → 从列表消失
                         → 显示已作废 → 恢复"，全程真实 HTTP。用户反馈过"战役管理里
                         仍然不能删除战役"，所以这条路径要单独盯

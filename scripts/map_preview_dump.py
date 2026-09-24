@@ -30,11 +30,72 @@ if hasattr(sys.stdout, "reconfigure"):
 CSRF = re.compile(rb'name="csrf_token"\s+value="([^"]+)"')
 SVG_RE = re.compile(r"(<svg\b.*?</svg>)", re.S)
 IMG_RE = re.compile(r'href="(/theater/[^"]*/map/image/\d+)"')
+#: 战役管理详情页里的普通 `<img>`（「战区地图」面板）
+IMG_TAG_RE = re.compile(r'src="(/theater/[^"]*/map/image/\d+)"')
+CSS_RE = re.compile(r'<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"[^>]*>')
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+def _abs(base: str, href: str) -> str:
+    """把 href 变成可请求的绝对地址（已经是绝对地址的原样返回）。"""
+    if href.startswith(("http://", "https://")):
+        return href
+    if href.startswith("//"):
+        return "http:" + href
+    return base.rstrip("/") + "/" + href.lstrip("/")
+
+
+def _dump_detail(args, cid, page, get, out_path: Path) -> int:
+    """把战役管理详情页（/theater/{id}）存成自包含预览页。
+
+    为什么要看这一眼：「战区地图」面板是不是**真的把图渲染出来了**，纯 HTML
+    断言答不了 —— `<img>` 的 URL 200、字节数对，但被 CSS 压成 0 高、被
+    overflow 裁掉、被 max-width 拉到看不见，都只有看图才知道。
+    这里把样式表和底图都内联进去，离屏也能看出真实样子。
+    """
+    # 1) 内联样式表（否则离线打开是一堆无样式文字，看不出真实版式）
+    #    ⚠️ 不能无脑 `base + href`：模板里用的是 `url_for('static', …)`，
+    #       渲染出来**已经是绝对地址**，拼一下就成了
+    #       "http://hosthttp://host/static/app.css"（getaddrinfo 直接失败）。
+    replaced_css = False
+    for tag, href in [(m.group(0), m.group(1)) for m in CSS_RE.finditer(page)]:
+        st, css = get(_abs(args.base, href))
+        if st == 200:
+            page = page.replace(tag, "<style>%s</style>"
+                                     % css.decode("utf-8", "replace"), 1)
+            print("已内联样式表 %s（%d 字节）" % (href, len(css)))
+            replaced_css = True
+    if not replaced_css:
+        print("⚠️ 没内联到样式表 —— 截图里的版式会与真实页面不同")
+
+    # 2) 底图：**写成旁边的文件**，用相对路径引用。
+    #    ⚠️ 不要内联成 data: URI —— 实测（Chrome headless，同一张 7.8 MB 底图）:
+    #       放 `<img src="file:///…">` 截图 1.79 MB（图正常画出），
+    #       放 `<img src="data:image/png;base64,…">`（10 MB 属性）截图只有 0.25 MB，
+    #       整页一个亮像素都没有 —— 图**根本没画**，会被误判成"面板没出来"。
+    #       写文件 + 相对路径既自包含又可靠。
+    hits = IMG_TAG_RE.findall(page)
+    if not hits:
+        print("⚠️ 页面里没有底图 <img> —— 面板没出来，或选了「不显示」")
+    for i, src in enumerate(dict.fromkeys(hits)):
+        ist, blob = get(_abs(args.base, src))
+        print("底图 %s -> %d（%d 字节）" % (src, ist, len(blob)))
+        if ist == 200:
+            side = out_path.with_name(out_path.stem + ".map%d.png" % i)
+            side.write_bytes(blob)
+            page = page.replace(src, side.name)
+            print("底图已写到 %s（相对路径引用）" % side.name)
+
+    # 3) 把剩下的站内链接改成绝对地址，免得截图时看起来像断链
+    page = re.sub(r'(href|src)="(/[^"]*)"', r'\1="%s\2"' % args.base, page)
+
+    out_path.write_text(page, encoding="utf-8")
+    print("已写出 %s（%d 字节）" % (out_path, len(page)))
+    return 0
 
 
 def main() -> int:
@@ -44,6 +105,8 @@ def main() -> int:
     ap.add_argument("--campaign", default=None, help="战役 id；不给就取列表第一个")
     ap.add_argument("--out", default="var/_map_preview.html")
     ap.add_argument("--map-query", default="", help="附加查询串，如 layer=all")
+    ap.add_argument("--page", default="map", choices=("map", "detail"),
+                    help="map=态势图（SVG）；detail=战役管理详情页（战区地图面板）")
     args = ap.parse_args()
 
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(),
@@ -90,12 +153,20 @@ def main() -> int:
         cid = ids[0].decode()
     print("战役 %s" % cid)
 
-    url = "%s/theater/%s/map" % (args.base, cid)
+    url = "%s/theater/%s%s" % (args.base, cid,
+                               "/map" if args.page == "map" else "")
     if args.map_query:
-        url += "?" + args.map_query
+        url += ("&" if "?" in url else "?") + args.map_query
     st, html = get(url)
     page = html.decode("utf-8", "replace")
-    print("态势图页 -> %d（%d 字节）" % (st, len(page)))
+    print("%s -> %d（%d 字节）"
+          % ("态势图页" if args.page == "map" else "详情页", st, len(page)))
+    if st != 200:
+        print("FAIL 页面不是 200")
+        return 1
+
+    if args.page == "detail":
+        return _dump_detail(args, cid, page, get, Path(args.out))
 
     sm = SVG_RE.search(page)
     if not sm:

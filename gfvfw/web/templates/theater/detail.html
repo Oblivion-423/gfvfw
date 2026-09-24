@@ -196,6 +196,81 @@
   <a class="btn ghost" href="/theater/{{ campaign.id }}/ground">地面 / 海军</a>
   {% if can_upload %}<a class="btn ghost" href="/theater/upload">再上报一份存档</a>{% endif %}
 </div>
+
+{# ------------------------------------------------------------------ #}
+{# 战区地图                                                             #}
+{# ⚠️ 联队口径的"战役管理"就是本页（/theater/{id}），所以底图必须在        #}
+{#    **本页也看得见** —— 以前只有 /theater/{id}/map 才有底图，用户在自己  #}
+{#    天天打开的战役管理页上根本不知道战区是什么样子。                    #}
+{#                                                                      #}
+{# 为什么只放**一张**、而不是在 /theater 列表每行来一张：                  #}
+{#    单张底图 7–15 MB，列表页放 N 张 = 首屏几十 MB。详情页本来就要加载     #}
+{#    态势图，成本与那张完全一样，所以这里放是安全的。                     #}
+{# 为什么用普通 <img> 而不是搬态势图的 SVG：本页只要"战区长什么样"，        #}
+{#    不要目标点/威胁环/缩放 JS。要看叠加图层就点进态势图。                #}
+{# 需要的上下文（maps / sel_map / sel_map_idx / map_disc / …）由           #}
+{#    theater_detail 里的 _map_ctx() 提供，与态势图**共用同一套选择逻辑**。 #}
+{# ------------------------------------------------------------------ #}
+<div class="panel tight" style="margin-top:18px">
+  <h2 style="margin-top:0">战区地图</h2>
+  {% if maps %}
+    <div class="row" style="gap:8px;margin-bottom:8px">
+      <span class="small muted nowrap">底图</span>
+      <a class="badge {{ 'accent' if maps_off else '' }}"
+         href="/theater/{{ campaign.id }}?map=none">不显示</a>
+      {% for m in maps %}
+        <a class="badge {{ 'accent' if sel_map and sel_map_idx == loop.index0 else '' }}"
+           href="/theater/{{ campaign.id }}?map={{ loop.index0 }}"
+           title="{{ m.name }}{% if m.origin == 'custom' %}（联队自备）{% endif %}">
+          {{ m.side_label }} · {{ m.size_label }}
+          {%- if m.origin == 'custom' %} ★{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+
+    {% if sel_map %}
+      {# ⚠️ 这里**刻意不加** loading="lazy"，也**刻意不加** decoding="async"。
+         两个都试过，实测截图证据（同一张 4096² 底图 7.8 MB、同样 1400 宽窗口）：
+           · 裸 <img>            → 1 548 410 字节（底图画出来了）
+           · loading="lazy"      → 视口外的图**根本不取**（另有对照：视口内 815 KB）
+           · decoding="async"    → 10 144 字节，整页一个亮像素都没有 ——
+                                   解码被推到布局之后，先画出一个**空框**。
+         "底图不显示"正是联队上一轮报过的故障，不能再自己造一次：这里要的是
+         **确定画出来**，而不是省一点解码时间。代价可控 —— 底图路由自带
+         Cache-Control max-age=604800 + ETag，一个浏览器一周只下一次，
+         且与态势图页共用同一张缓存。 #}
+      <a href="/theater/{{ campaign.id }}/map?map={{ sel_map_idx }}"
+         title="打开战场态势图（叠加目标点、单位、SAM 威胁环）">
+        <img src="/theater/{{ campaign.id }}/map/image/{{ sel_map_idx }}"
+             alt="{{ campaign.name }} 战区地图：{{ sel_map.name }}"
+             style="width:100%;height:auto;display:block;
+                    border:1px solid var(--border);border-radius:6px">
+      </a>
+      <div class="small muted" style="margin-top:8px">
+        当前底图：<code>{{ sel_map.name }}</code>
+        （{{ sel_map.side_label }}，{{ sel_map.size_label }}）
+        {%- if sel_map.origin == 'custom' %} —— 联队自备{% endif %}。
+        这里只是<b>纯底图</b>；要看目标点、单位与 SAM 威胁环，请打开
+        <a href="/theater/{{ campaign.id }}/map?map={{ sel_map_idx }}">战场态势图 →</a>
+      </div>
+    {% else %}
+      <div class="empty">底图已关闭。点上面的徽章可以重新打开。</div>
+    {% endif %}
+
+    {% if map_disc and map_disc.filtered_out %}
+      <div class="small muted" style="margin-top:6px">
+        自备目录里这些图<b>不属于本剧场</b>，已隐藏：
+        {% for n in map_disc.filtered_out %}<code class="small">{{ n }}</code>{% if not loop.last %}、{% endif %}{% endfor %}
+        —— 文件名里带上剧场名（例如 <code>{{ ov.save.theater }}.png</code>）就会被认出。
+      </div>
+    {% endif %}
+  {% else %}
+    <p class="small muted" style="margin-top:0">
+      这个剧场还没有可用的底图。底图<b>不在</b>仓库里，需要单独放一份。
+    </p>
+    {% include "theater/_map_missing.html" %}
+  {% endif %}
+</div>
 {% endif %}
 
 {# ------------------------------------------------------------------ #}

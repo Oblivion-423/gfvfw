@@ -51,6 +51,11 @@ desktop.ini
 *.log
 *.tmp
 
+# ---- 视觉工具的产物目录 ----
+# vision_* 工具（截图 / 裁剪 / 像素对比）把产物写到这里，属于**可随时重建**
+# 的中间物，不入库。它们照的页面预览本身也在 var/ 下（已忽略）。
+.dsh-vision-router/
+
 # 参考源码（CamReader / SITREP 的解压产物，第三方代码，不入库）
 reference/
 *.zip

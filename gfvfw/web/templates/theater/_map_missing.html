@@ -1,0 +1,76 @@
+{# ── 底图缺失时**必须说清楚为什么** ──
+   本区块由**两个页面共用**：态势图（/map）与战役管理详情页（/theater/{id}）
+   的「战区地图」面板。以前这段说明只写在态势图里，战役管理页加面板时若再抄
+   一份，两边必然慢慢不一致 —— 所以抽成 partial。
+
+   为什么值得写这么长：以前只有一句"未找到剧场地图"，用户完全无从下手 ——
+   不知道该往哪放图、不知道放对了没有。底图是"服务器上通常没有"的东西
+   （BMS 自带图动辄 192/768 MB，不该整套拷上去），所以这个空状态是
+   **常见情况**，不是异常。下面把搜索过程如实摊开：找过哪些目录、
+   里面有什么、为什么那些文件不算。
+
+   需要的上下文：map_dir_setting / map_dir_value / map_disc。 #}
+<div class="small" style="margin-top:8px;line-height:1.9">
+  <div style="margin-bottom:6px">
+    <b>怎么让底图出来</b>：拿一张 <b>正方形</b> PNG（边长 ≥ 1024，
+    建议用 BMS 的 <code>*_4K.png</code>，约 7–13 MB）放进
+    <code>{{ map_dir_setting }}</code> 指向的目录即可 —— 该目录优先于
+    BMS 自带图，也不需要重启服务。
+    <br>仓库里有现成的导出脚本（自动挑每个剧场最小的一张 4K 图并缩放到 4096）：
+    <code>python scripts/collect_theater_maps.py --out var/maps</code>。
+  </div>
+
+  {% if map_dir_value %}
+    <div class="muted" style="margin-bottom:6px">
+      当前 <code>{{ map_dir_setting }}</code> = <code>{{ map_dir_value }}</code>
+    </div>
+  {% else %}
+    <div style="margin-bottom:6px">
+      ⚠️ <code>{{ map_dir_setting }}</code> <b>尚未配置</b> ——
+      在服务器的 <code>/etc/gfvfw/env</code> 里设置它（例如
+      <code>{{ map_dir_setting }}=/srv/gfvfw/bms-data/maps</code>），
+      再把图放进那个目录，然后 <code>systemctl restart gfvfw</code>。
+    </div>
+  {% endif %}
+
+  {% if map_disc and map_disc.scanned_dirs %}
+    <details style="margin-top:8px">
+      <summary class="muted" style="cursor:pointer">
+        实际找过这 {{ map_disc.scanned_dirs|length }} 个目录（点开看细节）
+      </summary>
+      <div style="margin-top:6px">
+        {% for s in map_disc.scanned_dirs %}
+          <div style="margin-bottom:4px">
+            <code class="small" style="word-break:break-all">{{ s.directory }}</code>
+            {% if s.origin == 'custom' %}<span class="badge">自备</span>{% endif %}
+            —— 可用 <b>{{ s.accepted }}</b>
+            {%- if s.rejected %}，另有 {{ s.rejected|length }} 个看着像但没用上{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </details>
+  {% endif %}
+
+  {% if map_disc and map_disc.near_misses %}
+    <div style="margin-top:8px">
+      <span class="muted">看着像地图、但不符合要求的前几个：</span>
+      <table style="font-size:12px;margin-top:4px">
+        <tr><th>文件</th><th class="num">体积</th><th>没采用的原因</th></tr>
+        {% for name, directory, size, why in map_disc.near_misses[:8] %}
+          <tr>
+            <td><code class="small">{{ name }}</code>
+                <span class="muted small">（{{ directory.name }}）</span></td>
+            <td class="num">{{ (size / 1048576)|round(1) }} MB</td>
+            <td>{{ why }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+  {% endif %}
+
+  {% if map_disc and map_disc.problems %}
+    {% for p in map_disc.problems %}
+      <div class="muted" style="margin-top:6px">⚠️ {{ p }}</div>
+    {% endfor %}
+  {% endif %}
+</div>
