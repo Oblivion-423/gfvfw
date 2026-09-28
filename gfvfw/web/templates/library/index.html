@@ -2,78 +2,120 @@
 {% block title %}资料查询 · {{ SITE_NAME }}{% endblock %}
 
 {% block content %}
-<div class="page-head">
-  <div>
-    <h1>资料查询</h1>
-    <div class="sub">手册、检查单、地图、涂装、教程</div>
+<div class="explorer-page"
+     data-can-upload="{{ '1' if can_upload else '0' }}"
+     data-can-manage="{{ '1' if can_manage else '0' }}">
+
+  <div class="page-head">
+    <div>
+      <h1>资料查询</h1>
+      <div class="sub">
+        手册、检查单、地图、涂装、教程
+        {% if not principal.is_member %}
+          · <span class="muted">游客可在线预览，下载仅限队员</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="row">
+      <input type="text" id="searchInput" placeholder="搜索文件名…"
+             style="width: 240px">
+      {% if can_upload %}
+      <button class="btn" id="uploadBtn" type="button">上传</button>
+      {% endif %}
+    </div>
   </div>
-</div>
 
-<div class="flash warn">
-  <strong>此功能尚未实现。</strong>
-  当前页面是占位说明 —— 点进来看到这段文字是正常的，不是故障。
-</div>
+  <div class="explorer">
+    <aside class="explorer-side">
+      <div class="side-head">
+        <span>📚 资料库</span>
+        <span class="path" id="curPath">/</span>
+        <button id="refreshBtn" title="刷新" type="button">↻</button>
+      </div>
+      <div class="tree" id="tree"></div>
+    </aside>
 
-<div class="panel">
-  <h2 style="margin-top:0">计划中的能力</h2>
-  <table>
-    <thead><tr><th style="width:180px">能力</th><th>说明</th><th style="width:90px">状态</th></tr></thead>
-    <tbody>
-      <tr>
-        <td>资料上传与分类</td>
-        <td>手册 / 检查单 / 地图 / 涂装 / 教程 / 简报</td>
-        <td><span class="badge">待实现</span></td>
-      </tr>
-      <tr>
-        <td>按机型归类</td>
-        <td>与已有的机型字典关联，按机型检索资料</td>
-        <td><span class="badge">待实现</span></td>
-      </tr>
-      <tr>
-        <td>关键词检索</td>
-        <td>标题与说明的全文检索</td>
-        <td><span class="badge">待实现</span></td>
-      </tr>
-      <tr>
-        <td>版本与下载计数</td>
-        <td>资料版本管理、下载次数统计</td>
-        <td><span class="badge">待实现</span></td>
-      </tr>
-      <tr>
-        <td>可见性控制</td>
-        <td>公开 / 内部 / 指挥层三级（复用现有可见性机制）</td>
-        <td><span class="badge">待实现</span></td>
-      </tr>
-    </tbody>
-  </table>
-  <p class="small muted" style="margin-bottom:0">
-    数据库表（<code>documents</code>）已建好，缺的是上传与检索界面。
-    {% if not principal.is_member %}
-      <br><strong>你目前是游客</strong>：这一页（资料目录）对你开放，
-      但将来真正的文件<strong>下载</strong>仍仅限队员。
-    {% endif %}
-  </p>
-</div>
-
-<div class="panel">
-  <h2 style="margin-top:0">现在能做什么</h2>
-  <p class="small">
-    ACMI 原件已归档保存。要看回放可从任务详情页下载原件，
-    用本地 Tacview 打开 —— <strong>系统不做网页轨迹回放</strong>。
-    {% if not principal.is_member %}
-      <br><span class="muted">
-        任务详情页属于队内详情，需要队员身份；你现在可以先看战役记录与飞行员汇总。
-      </span>
-    {% endif %}
-  </p>
-  <div class="actions">
-    <a class="btn" href="/log/campaign">战役记录</a>
-    <a class="btn ghost" href="/log/pilots">飞行员个人记录</a>
+    <main class="explorer-main">
+      <div class="viewer-head" id="viewerHead" style="display:none">
+        <span class="fname" id="fileName"></span>
+        <span class="badge accent" id="fileType"></span>
+        <span class="badge" id="fileVisibility"></span>
+        <span class="spacer"></span>
+        <span class="zoom-controls">
+        <button type="button" id="zoomOut" title="缩小">−</button>
+        <span id="zoomLabel" class="zoom-label">100%</span>
+        <button type="button" id="zoomIn" title="放大">+</button>
+        <button type="button" id="zoomReset" title="重置">⟲</button>
+        </span>
+        {% if can_download %}
+        <a class="btn ghost" id="downloadBtn" href="#">下载</a>
+        {% else %}
+        <span class="badge">游客不可下载</span>
+        {% endif %}
+      </div>
+      <div class="viewer-body" id="viewerBody">
+        <div class="empty">请从左侧选择文件进行预览</div>
+      </div>
+    </main>
   </div>
-  {% if docs %}
-    <p class="small muted" style="margin-top:14px">
-      数据库中已有 {{ docs }} 份资料记录（界面未实现，暂不可访问）。
-    </p>
+
+  {% if can_upload %}
+  <dialog id="uploadDialog" class="upload-dialog">
+    <form id="uploadForm">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h3 style="margin-top:0">上传资料</h3>
+      <div class="form-grid">
+        <div class="field full">
+          <label>文件</label>
+          <input type="file" name="file" id="uploadFile" required>
+        </div>
+        <div class="field">
+          <label>目录</label>
+          <input type="text" name="folder" id="uploadFolder"
+                 placeholder="manuals/f16" value="">
+        </div>
+        <div class="field">
+          <label>标题</label>
+          <input type="text" name="title" id="uploadTitle"
+                 placeholder="留空用原文件名">
+        </div>
+        <div class="field">
+          <label>分类</label>
+          <select name="category" id="uploadCategory">
+            <option value="manual">手册</option>
+            <option value="checklist">检查单</option>
+            <option value="map">地图</option>
+            <option value="livery">涂装</option>
+            <option value="tutorial">教程</option>
+            <option value="briefing">简报</option>
+            <option value="other" selected>其他</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>可见性</label>
+          <select name="visibility" id="uploadVisibility">
+            <option value="public">公开</option>
+            <option value="members" selected>队内</option>
+            {% if can_manage %}
+            <option value="command">指挥层</option>
+            {% endif %}
+          </select>
+        </div>
+        <div class="field full">
+          <label>说明</label>
+          <textarea name="description" id="uploadDescription" rows="2"></textarea>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="submit" class="btn">上传</button>
+        <button type="button" class="btn ghost" id="uploadCancel">取消</button>
+        <span class="spacer"></span>
+        <span class="muted small" id="uploadMsg"></span>
+      </div>
+    </form>
+  </dialog>
   {% endif %}
 </div>
+
+<script src="/static/library.js"></script>
 {% endblock %}

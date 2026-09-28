@@ -75,6 +75,20 @@ SYSTEM_AUDIT_VIEW = "system.audit.view"
 SYSTEM_BACKUP = "system.backup"
 SYSTEM_ROLE_ASSIGN = "system.role.assign"
 
+# ---- 资料库 ----
+#: 看资料列表页与公开资料（游客也有）
+LIBRARY_VIEW = "library.view"
+#: 下载原件（图片、PDF、其他）—— 游客只能在线预览，不能下载
+LIBRARY_DOWNLOAD = "library.download"
+#: 上传新资料
+LIBRARY_UPLOAD = "library.upload"
+#: 编辑元数据（标题、目录、可见性、机型）
+LIBRARY_EDIT = "library.edit"
+#: 删除/恢复资料
+LIBRARY_DELETE = "library.delete"
+#: 看 visibility='command' 的资料
+LIBRARY_VIEW_INTERNAL = "library.view.internal"
+
 #: 全部权限点（用于校验 role_permissions 表内容合法）
 ALL_PERMISSIONS: frozenset[str] = frozenset({
     MEMBER_VIEW, MEMBER_CREATE, MEMBER_EDIT, MEMBER_DELETE, MEMBER_VOID,
@@ -86,6 +100,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset({
     CAMPAIGN_MANAGE, CAMPAIGN_VIEW, CAMPAIGN_UPLOAD,
     ANNOUNCE_PUBLISH, DOC_UPLOAD, DOC_MANAGE, FORUM_POST, FORUM_MODERATE, EVENT_MANAGE,
     SYSTEM_SETTINGS, SYSTEM_AUDIT_VIEW, SYSTEM_BACKUP, SYSTEM_ROLE_ASSIGN,
+    LIBRARY_VIEW, LIBRARY_DOWNLOAD, LIBRARY_UPLOAD, LIBRARY_EDIT, LIBRARY_DELETE, LIBRARY_VIEW_INTERNAL,
 })
 
 

@@ -6,7 +6,7 @@
   2. 飞行记录子菜单三项：战役记录 / 训练记录 / 飞行员个人记录
      （需求："删去当前已有的任务记录" —— 子菜单不再含"全部任务"）
   3. 三个子页面均可访问，且按预期口径筛选
-  4. 占位页（战役管理、资料查询）明确标注"尚未实现"，不是空白页
+  4. 战役管理与资料查询均已实现（不再是占位页）
   5. 主导航不含冗余的顶级入口（原先的"任务记录/战役/飞行日志/统计"已下移）
   6. "ACMI 导入 / 飞行员认领 / 归并确认"仅从导航隐藏，页面与数据保留
 
@@ -213,7 +213,7 @@ def main() -> int:
                                                 "战役内训练-01")))
                 check("显示汇总卡片", "总飞行时长" in r.text)
 
-            print("\n[5] 战役管理已实现；资料查询仍为占位页")
+            print("\n[5] 战役管理与资料查询均已实现")
             with TestClient(app) as client:
                 login(client, auser)
                 # 战役管理现在是真功能（解析 BMS .cam），不再是占位页
@@ -224,13 +224,16 @@ def main() -> int:
                 check("战役管理有上报入口或说明",
                       "/theater/upload" in r.text or "上报战役存档" in r.text)
 
-                # 资料查询仍是占位页，且明确标注
+                # 资料查询现在是真功能（文件管理器 + 预览）
                 r = client.get("/library")
                 check("资料查询页可访问", r.status_code == 200)
-                check("资料查询标注尚未实现", "此功能尚未实现" in r.text)
-                check("资料查询说明不做回放", "网页轨迹回放" in r.text)
-                check("资料查询指路到飞行记录",
-                      "/log/campaign" in r.text and "/log/pilots" in r.text)
+                check("资料查询有文件树容器",
+                      'class="explorer"' in r.text or 'id="tree"' in r.text)
+                check("资料查询有搜索框", 'id="searchInput"' in r.text)
+                check("资料查询引用了 library.js",
+                      "/static/library.js" in r.text)
+                check("资料查询不再有占位文案",
+                      "此功能尚未实现" not in r.text)
 
             print("\n[6] 主页功能导航表")
             with TestClient(app) as client:

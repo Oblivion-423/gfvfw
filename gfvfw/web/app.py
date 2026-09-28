@@ -36,7 +36,7 @@ from .deps import (
 )
 from .routers import (
     account, acmi, applications, apply, auth, campaigns, enroll, home, logbook,
-    members, missions, placeholders, sorties, stats, theater,
+    members, missions, sorties, stats, theater,library,
 )
 from .templating import STATIC_DIR, render
 
@@ -176,7 +176,7 @@ def create_app() -> FastAPI:
     app.include_router(campaigns.router)
     app.include_router(theater.router)
     app.include_router(stats.router)
-    app.include_router(placeholders.router)
+    app.include_router(library.router)
 
     return app
 

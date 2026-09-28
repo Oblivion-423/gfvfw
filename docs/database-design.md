@@ -602,11 +602,23 @@
 | `size_bytes` | BIGINT | |
 | `mime_type` | TEXT | |
 | `version` | TEXT NULL | 版本号 |
+| `folder` | TEXT | NOT NULL, DEFAULT `''` | 逻辑目录，`/` 分隔；`''`=根。改目录只改此列，物理文件不动 |
+| `original_filename` | TEXT | NOT NULL, DEFAULT `''` | 用户上传时的原始文件名。历史记录为空串 |
 | `aircraft_type_id` | TEXT FK NULL | 按机型归类 |
 | `visibility` | TEXT | D6 |
 | `download_count` | INTEGER DEFAULT 0 | |
 | `uploaded_by` | TEXT FK→users | |
 | 通用列 | | D5/D8 |
+
+> **v1.4 新增两列**（`folder` / `original_filename`）：支撑资料库的"左侧文件管理器"视图。
+> 物理存储与逻辑目录解耦——`stored_path` 恒为 `docs/<id>.<ext>`，目录层级完全由 `folder` 表达。
+> 这样改目录名只改 DB 列，不用文件系统 mv。
+>
+> **`sha256` 保持无 UNIQUE**（与 `acmi_files` 不同）：允许同一文件软删后重传。
+> 去重改由应用层 `find_by_sha256` 提示，不做 DB 约束。
+>
+> **`category='image'`** 的系统内部图（头像、封面）在资料树里过滤掉，
+> 不混进用户可见的资料列表。
 
 **索引**：`sha256`、`category`、`(category, created_at)`、`visibility`
 
@@ -1012,7 +1024,7 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 | v1.1 | **时长两个口径**（任务维度并集 / 飞行员维度相加）：`missions.duration_seconds` 降级为"归并时刷新"的冗余列，页面改为**读取时**经 `services/stats.py::mission_flight_seconds` 计算，避免冗余列过期导致展示不一致 |
 | v1.2 | **上线与运维**：`deploy/` 产物（systemd / Caddy / 备份 / 一键升级）；`GFVFW_HTTPS_ONLY` 与会话 Cookie `Secure`；审计取 `X-Forwarded-For` 时**只信任受信代理**（否则 IP 可被客户端伪造） |
 | v1.3 | **新增 requirements §5.4 人工修正与删除口径**，本文档同步：<br>① 明确 `acmi_files` 是 **D5 软删除的例外**（硬删除，否则 `sha256` UNIQUE 会导致同文件永不可重传）；<br>② 已归并文件禁止直接删除 —— 任务删除时把 `mission_id`/`batch_id` 置空以**撤销归并**；<br>③ 人工改动留痕列（`data_confidence` / `data_source` / `edited_by` / `edit_note`）确认语义，`edited_by` 指向 **`users.id`**（改的人可能已不是成员） |
-
+| v1.4 | **资料库**：`documents` 表新增 `folder` / `original_filename` 两列，支撑文件管理器视图；`schema_sync` 扩展为**同时补列和补索引**（此前只补列，索引靠 `create_all` 建表时才有，导致已有库上新增索引静默失效） |
 ---
 
 ## 10. 实现状态与实现期发现

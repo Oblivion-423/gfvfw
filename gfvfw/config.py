@@ -137,6 +137,21 @@ class Settings(BaseSettings):
     #: 只挡住"一个来源无限刷"。默认给得比较宽 —— 联队集体入队常常共用一个出口 IP。
     max_enroll_per_ip_per_day: int = 20
 
+    # GFVFW_DOCS_WARN_UPLOAD_MB   默认 100
+    # GFVFW_DOCS_MAX_UPLOAD_MB    默认 200
+    # GFVFW_DOCS_CACHE_DIR        默认 ./var/library_cache
+    docs_warn_upload_mb: int = 100
+    docs_max_upload_mb: int = 200
+    docs_cache_dir: Path = Path("./var/library_cache")
+
+    @property
+    def docs_warn_upload_bytes(self) -> int:
+        return self.docs_warn_upload_mb * 1024 * 1024
+
+    @property
+    def docs_max_upload_bytes(self) -> int:
+        return self.docs_max_upload_mb * 1024 * 1024
+
     # ---- 备份 ----
     backup_dir: Path = Field(default_factory=lambda: BASE_DIR / "var" / "backups")
     backup_keep_days: int = 30
