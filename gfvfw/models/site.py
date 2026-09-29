@@ -5,7 +5,7 @@
 """
 
 from __future__ import annotations
-
+from sqlalchemy import text
 from datetime import datetime
 from typing import Optional
 
@@ -155,6 +155,22 @@ class Document(IdMixin, TimestampMixin, SoftDeleteMixin, Base):
     mime_type: Mapped[Optional[str]] = mapped_column(String(128))
     version: Mapped[Optional[str]] = mapped_column(String(32))
 
+    folder: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        server_default=text("''"),
+        default="",
+        comment="逻辑目录，'/' 分隔，''=根；不含前后斜杠，不允许 '..'",
+    )
+
+    original_filename: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        server_default=text("''"),
+        default="",
+        comment="用户上传时的原始文件名；历史记录为空串",
+    )
+
     aircraft_type_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("aircraft_types.id"))
     visibility: Mapped[str] = mapped_column(String(16), default="members", nullable=False)
@@ -162,6 +178,8 @@ class Document(IdMixin, TimestampMixin, SoftDeleteMixin, Base):
     uploaded_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
 
     __table_args__ = (
+        Index("ix_documents_folder_name", "folder", "original_filename"),
+        Index("ix_documents_folder_created", "folder", "created_at"),
         Index("ix_documents_sha256", "sha256"),
         Index("ix_documents_category_created", "category", "created_at"),
         Index("ix_documents_visibility", "visibility"),

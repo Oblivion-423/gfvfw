@@ -18,7 +18,7 @@ import logging
 
 import uvicorn
 
-from .config import settings
+from gfvfw.config import settings
 
 
 def main() -> None:
