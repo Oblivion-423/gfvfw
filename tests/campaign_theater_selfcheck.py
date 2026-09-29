@@ -444,6 +444,34 @@ def test_real_parse(bms: Path, cam: Path) -> None:
     check("有队伍占有目标点", any(o.team_id >= 0 for o in st.objectives))
     check("SAM 威胁半径非空", len(st.sam_threat) > 0)
 
+    # ★ 地面/海军编制单位的具体类型（entityTypeId → CT → UCD → VCD 载具名）。
+    #   这是"每个地面营到底是装甲营还是防空营"的依据 —— 数据一直在剧场
+    #   表里，此前只是没有解析。
+    gn = [u for u in st.units
+          if u.unit_kind in ("Battalion", "Brigade", "Division", "TaskForce")]
+    if gn:
+        named = [u for u in gn if u.unit_type]
+        ratio = len(named) / len(gn)
+        print("      地面/海军单位 %d 个，解出具体类型 %d 个（%.1f%%）"
+              % (len(gn), len(named), 100 * ratio))
+        check("地面/海军单位具体类型解出率 ≥ 90%", ratio >= 0.90,
+              "%d/%d" % (len(named), len(gn)))
+        check("解出类型的单位都带主战角色",
+              all(u.unit_role for u in named))
+        with_vehicles = [u for u in named if u.vehicles]
+        # 少数高级编制（旅/师等）的 UCD 本身没有载具槽位 → 无编成载具，
+        # 属数据形态而非缺陷；实测真实存档 ≈88%。
+        check("至少 80% 的类型已解出单位带编成载具",
+              not named or len(with_vehicles) / len(named) >= 0.80,
+              "%d/%d" % (len(with_vehicles), len(named)))
+        sample = next((u for u in named if u.vehicles), None)
+        if sample:
+            print("      样例：%s %s（%s）→ %s"
+                  % (sample.unit_kind, sample.unit_type, sample.unit_role,
+                     "、".join(sample.vehicles[:4])))
+    else:
+        print("      注意：这份存档里没有地面/海军编制单位")
+
     # 目标类型名：不得有目标点落到"没解析出来"的哨兵上。
     # theater 侧映射失败返回 C# 原样的 "Type-1"，本模块兜底是 "Unknown"，
     # 两个都必须被认出来（否则页面静默显示哨兵名而没有任何告警）。
@@ -1449,29 +1477,32 @@ def test_map_without_theater_data() -> None:
                       "%d vs %d" % (len(img.content),
                                     (maps_dir / "Hellas.png").stat().st_size))
 
-            # ── 战役管理详情页也要有「战区地图」面板 ──
-            # 联队口径的"战役管理"就是 /theater/{id}：以前只有在态势图页才看得到
-            # 底图，用户在自己天天打开的页面上看不到战区长什么样。
+            # ── 战役管理详情页首页要嵌**完整态势图** ──
+            # 联队口径的"战役管理"就是 /theater/{id}：上一轮只放了纯底图，
+            # 这轮升级成与 /map 同一份地图模板（theater/_situation_map.html）——
+            # 目标点、单位、缩放平移都在首页，不再是只有 <img> 的静态图。
             r = client.get("/theater/%s" % cid)
             check("战役管理详情页可打开", r.status_code == 200,
                   "得到 %d" % r.status_code)
             d = r.text
-            check("★ 详情页有「战区地图」面板", "战区地图" in d)
-            check("★ 详情页面板里真的有底图 <img>",
-                  re.search(r'<img[^>]*src="/theater/%s/map/image/\d+"' % cid, d)
-                  is not None, "面板里没有 <img> —— 图没出来")
-            # ⚠️ 这两条是**实测**结论，不是风格偏好。同一张 4096² 底图、同一窗口
-            #    截图：裸 <img> 1 548 410 字节（画出来了）；loading="lazy" 对
-            #    视口外的图根本不取；decoding="async" 只有 10 144 字节且整页
-            #    没有亮像素 —— 解码被推到布局之后，先画出一个**空框**。
-            #    "底图不显示"是联队报过的故障，不能再自己造一次。
+            check("★ 详情页有「战场态势图」面板", "战场态势图" in d)
+            check("★ 详情页嵌的是完整态势图（SVG 本体，共用 partial）",
+                  'id="sitemap"' in d, "面板里没有 #sitemap —— partial 没include对")
+            check("★ 详情页态势图有缩放按钮（JS 与 /map 同一份）",
+                  'id="zin"' in d and 'id="zreset"' in d)
+            # ⚠️ 详情页的底图叠加走 SVG <image href=…>（不再是 <img src=…>）。
+            #    "底图不显示"是联队报过的故障：这里的断言就是确认叠加真的渲染了。
+            check("★ 详情页态势图叠了底图 <image>",
+                  re.search(r'<image[^>]*href="/theater/%s/map/image/\d+"' % cid, d)
+                  is not None, "面板里没有底图 <image> —— 图没出来")
             check("★ 底图不是 loading=lazy（视口外懒加载不取，只剩空框）",
                   'loading="lazy"' not in d)
             check("★ 底图不是 decoding=async（解码被推后，先画空框）",
                   'decoding="async"' not in d)
             check("面板可切换其它底图", 'href="/theater/%s?map=' % cid in d)
             check("面板有「不显示」开关", 'href="/theater/%s?map=none"' % cid in d)
-            check("面板可进完整态势图", 'href="/theater/%s/map?map=' % cid in d)
+            check("面板可进完整态势图（图例/SAM 表所在页）",
+                  'href="/theater/%s/map?map=' % cid in d)
 
             r = client.get("/theater/%s?map=none" % cid)
             check("详情页 ?map=none 可打开", r.status_code == 200)
@@ -1495,7 +1526,7 @@ def test_map_without_theater_data() -> None:
             check("★ 空状态说明在详情页也存在（共用 partial 没抽错）",
                   "GFVFW_BMS_MAP_DIR" in r3.text
                   and ("_4K" in r3.text or "正方形" in r3.text))
-            check("没底图时详情页不含底图 <img>", "/map/image/" not in r3.text)
+            check("没底图时详情页不输出底图叠加", "/map/image/" not in r3.text)
     finally:
         (dbmod.SessionLocal, deps.SessionLocal, appmod.SessionLocal,
          cfg.settings.storage_dir, cfg.settings.bms_map_dir,

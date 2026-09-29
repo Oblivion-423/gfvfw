@@ -4,19 +4,22 @@
 导航结构（一级菜单 → 子菜单）
 ------------------------------
 * **飞行记录**（一级）
-    * ``/log/campaign``  战役记录 —— 归入战役的任务
-    * ``/log/training``  训练记录 —— 训练类且不属战役的任务
-    * ``/log/pilots``    飞行员个人记录 —— 按人汇总与明细
-    * ``/missions``      全部任务（未归类的兜底入口）
-    * ``/log``           高级查询 —— 多条件组合
+    * ``/log/campaign``          战役记录 · 一层 —— 全部战役（卡片汇总）
+    * ``/log/campaign/{id}``     战役记录 · 二层 —— 该战役的任务与架次明细
+    * ``/log/training``          训练记录 —— 训练类且不属战役的任务
+    * ``/log/pilots``            飞行员个人记录 —— 按人汇总与明细
+    * ``/missions``              全部任务（未归类的兜底入口）
+    * ``/log``                   高级查询 —— 多条件组合
 * ``/stats`` 统计总览
 """
 
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -25,6 +28,7 @@ from ...services import stats as S
 from ..deps import Principal, get_db, require_login
 from ..templating import render
 from .acmi import wizard_for_request
+from .campaigns import STATUS_BADGE, STATUS_LABELS
 
 router = APIRouter()
 
@@ -142,6 +146,46 @@ def _log_context() -> dict:
     }
 
 
+def _campaign_cards(db: Session, campaigns: list[Campaign]) -> list[dict]:
+    """第一层战役卡片的汇总（任务数 / 架次 / 日志总时长 / 战损）。
+
+    ⚠️ 任务维度的「日志总时长」沿用既定口径：**同一任务的在空区间并集
+    只算一次**（:func:`S.mission_flight_seconds`），多人同飞不翻倍。
+    全部聚合各发一次查询，卡片数量增长也不会造成 N+1。
+    """
+    ids = [c.id for c in campaigns]
+    if not ids:
+        return []
+    agg = {cid: {"missions": 0, "sorties": 0, "flight_seconds": 0,
+                 "distance_nm": 0.0, "deaths": 0} for cid in ids}
+
+    missions = db.execute(
+        select(Mission.id, Mission.campaign_id)
+        .where(Mission.deleted_at.is_(None), Mission.campaign_id.in_(ids))
+    ).all()
+    once = S.mission_flight_seconds(db, [mid for mid, _cid in missions])
+    for mid, cid in missions:
+        agg[cid]["missions"] += 1
+        agg[cid]["flight_seconds"] += once.get(mid, 0)
+
+    sortie_agg = db.execute(
+        select(Mission.campaign_id,
+               func.count(Sortie.id),
+               func.coalesce(func.sum(Sortie.distance_meters), 0),
+               func.coalesce(func.sum(Sortie.deaths), 0))
+        .join(Sortie, Sortie.mission_id == Mission.id)
+        .where(Sortie.deleted_at.is_(None), Mission.deleted_at.is_(None),
+               Mission.campaign_id.in_(ids))
+        .group_by(Mission.campaign_id)
+    ).all()
+    for cid, n_sorties, dist, deaths in sortie_agg:
+        agg[cid]["sorties"] = int(n_sorties)
+        agg[cid]["distance_nm"] = int(dist) / S.METERS_PER_NM
+        agg[cid]["deaths"] = int(deaths)
+
+    return [{"campaign": c, **agg[c.id]} for c in campaigns]
+
+
 @router.get("/log/campaign")
 def log_campaign(request: Request,
                  campaign_id: str = "",
@@ -149,65 +193,98 @@ def log_campaign(request: Request,
                  date_to: str = "",
                  principal: Principal = Depends(require_login),
                  db: Session = Depends(get_db)):
-    """战役记录 —— 归入战役的任务列表（战史视角）。"""
+    """战役记录 —— **第一层：全部战役**。
+
+    一层只列战役（卡片带任务数 / 架次 / 日志总时长汇总），
+    点进 ``/log/campaign/{id}`` 才是该战役的任务与架次明细。
+
+    旧版本页是"全部任务的平铺列表 + 战役下拉筛选"，``?campaign_id=…``
+    的旧书签与工作台回跳链接一律 302 到对应战役的明细页（其余查询参数
+    原样带走，``?acmi=`` 阶段与日期筛选都不会丢）。
+    """
+    if campaign_id:
+        rest = [(k, v) for k, v in request.query_params.multi_items()
+                if k != "campaign_id"]
+        url = "/log/campaign/%s" % campaign_id
+        if rest:
+            url += "?" + urlencode(rest)
+        return RedirectResponse(url, status_code=302)
+
     campaigns = list(db.scalars(
         select(Campaign).where(Campaign.deleted_at.is_(None))
         .order_by(Campaign.sort_order, Campaign.started_at.desc())))
 
-    stmt = (select(Mission, Campaign.name, Campaign.theater)
-            .join(Campaign, Campaign.id == Mission.campaign_id)
-            .where(Mission.deleted_at.is_(None), Campaign.deleted_at.is_(None))
+    return render(request, "log/campaign.html", {
+        **_log_context(),
+        # 「ACMI 工作台」。第一层不针对某场战役，归并表单里的归属战役
+        # 不锁定（选了哪场，上传后就落到那场战役的明细页继续流程）。
+        **wizard_for_request(db, principal, request,
+                             return_to="/log/campaign"),
+        "cards": _campaign_cards(db, campaigns),
+        "status_labels": STATUS_LABELS,
+        "status_badge": STATUS_BADGE,
+        "can_manage_campaign": principal.can("campaign.manage"),
+    })
+
+
+@router.get("/log/campaign/{campaign_id}")
+def log_campaign_detail(campaign_id: str,
+                        request: Request,
+                        date_from: str = "",
+                        date_to: str = "",
+                        principal: Principal = Depends(require_login),
+                        db: Session = Depends(get_db)):
+    """战役记录 —— **第二层：一场战役的任务与架次明细**（战史视角）。"""
+    campaign = db.get(Campaign, campaign_id)
+    if campaign is None or campaign.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="战役不存在")
+
+    stmt = (select(Mission)
+            .where(Mission.deleted_at.is_(None),
+                   Mission.campaign_id == campaign.id)
             .order_by(Mission.started_at.desc()))
-    if campaign_id:
-        stmt = stmt.where(Mission.campaign_id == campaign_id)
     df, dt_to = _parse_day(date_from, False), _parse_day(date_to, True)
     if df:
         stmt = stmt.where(Mission.started_at >= df)
     if dt_to:
         stmt = stmt.where(Mission.started_at < dt_to)
 
-    rows = db.execute(stmt).all()
-    missions = []
-    totals = {"missions": len(rows), "sorties": 0, "flight_seconds": 0,
+    missions = list(db.scalars(stmt))
+    totals = {"missions": len(missions), "sorties": 0, "flight_seconds": 0,
               "distance_nm": 0.0, "deaths": 0}
     # 任务时长口径：多人飞同一任务只算一次（各架次在空区间取并集）
-    once = S.mission_flight_seconds(db, [m.id for m, _c, _t in rows])
-    for m, cname, theater in rows:
+    once = S.mission_flight_seconds(db, [m.id for m in missions])
+    rows = []
+    for m in missions:
         agg = db.execute(
             select(func.count(Sortie.id),
-                   func.coalesce(func.sum(Sortie.flight_seconds), 0),
                    func.coalesce(func.sum(Sortie.distance_meters), 0),
                    func.coalesce(func.sum(Sortie.deaths), 0))
             .where(Sortie.mission_id == m.id, Sortie.deleted_at.is_(None))
         ).one()
-        nm = int(agg[2]) / S.METERS_PER_NM
-        missions.append({"mission": m, "campaign_name": cname, "theater": theater,
-                         "sorties": int(agg[0]),
-                         "flight_seconds": once.get(m.id, 0),
-                         "distance_nm": nm, "deaths": int(agg[3])})
+        nm = int(agg[1]) / S.METERS_PER_NM
+        rows.append({"mission": m, "sorties": int(agg[0]),
+                     "flight_seconds": once.get(m.id, 0),
+                     "distance_nm": nm, "deaths": int(agg[2])})
         totals["sorties"] += int(agg[0])
         totals["flight_seconds"] += once.get(m.id, 0)
         totals["distance_nm"] += nm
-        totals["deaths"] += int(agg[3])
+        totals["deaths"] += int(agg[2])
 
-    # 有战役但尚无任务的情况也要提示
-    campaigns_with_missions = {m["mission"].campaign_id for m in missions}
-
-    return render(request, "log/campaign.html", {
+    return render(request, "log/campaign_detail.html", {
         **_log_context(),
-        # 「ACMI 工作台」内嵌区块。战役**锁定**为页面顶部筛选出的那个：
-        # 页面上已经有了战役下拉，再放一个会变成两个控件绑同一个参数。
-        # 于是语义很直白 ——「筛到哪个战役，上传就归入哪个战役」。
+        # 「ACMI 工作台」。战役**锁定**为当前战役：归并出的任务直接归入它，
+        # 也保证上传完的东西立刻出现在本页的任务列表里。
         **wizard_for_request(db, principal, request,
-                             return_to="/log/campaign",
-                             campaign_id=campaign_id,
+                             return_to="/log/campaign/%s" % campaign.id,
+                             campaign_id=campaign.id,
                              lock_campaign=True),
-        "missions": missions,
-        "campaigns": campaigns,
+        "campaign": campaign,
+        "missions": rows,
         "totals": totals,
-        "q": {"campaign_id": campaign_id, "date_from": date_from, "date_to": date_to},
-        "campaigns_without_missions": [
-            c for c in campaigns if c.id not in campaigns_with_missions],
+        "status_labels": STATUS_LABELS,
+        "status_badge": STATUS_BADGE,
+        "q": {"date_from": date_from, "date_to": date_to},
         "can_manage_campaign": principal.can("campaign.manage"),
     })
 

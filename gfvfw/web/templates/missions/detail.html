@@ -158,6 +158,92 @@
 </div>
 {% endif %}
 
+{# ==========================================================================
+   Tacview 战斗分析 —— 分析随 ACMI 工作台上传 .acmi 自动生成（不再单独上传），
+   归并确认后挂到本任务。这里内嵌展示概要与每名飞行员的战斗统计，
+   完整击杀链 / 分武器 / 未中列表在 /tacview/{id}。
+   ========================================================================== #}
+<div class="panel">
+  <h2 style="margin-top:0">Tacview 战斗分析</h2>
+  {% if tacview_did_message %}<div class="flash ok">{{ tacview_did_message }}</div>{% endif %}
+  {% if tacview_error %}<div class="flash error">{{ tacview_error }}</div>{% endif %}
+
+  {% for f in tacview_files %}
+  {% set vm = f.vm_json|fromjson %}
+  <h3 style="margin-bottom:6px">
+    {{ f.original_filename }}
+    {% if f.source_format == 'acmi' %}
+      <span class="badge" title="战斗事件由 .acmi 轨迹自动推断（开火/命中/击杀为推断口径）">ACMI 转换</span>
+    {% endif %}
+    <span class="small muted">· {{ f.size_bytes|filesize }} · {{ f.event_count }} 事件</span>
+    <span class="row" style="display:inline-flex;gap:8px;margin-left:8px">
+      {% if f.vm_json %}<a class="small" href="/tacview/{{ f.id }}">完整分析 →</a>{% endif %}
+      <a class="small" href="/tacview/{{ f.id }}/download">下载</a>
+      {% if (f.uploaded_by and principal.user and f.uploaded_by == principal.user.id) or tacview_can_manage_any %}
+      <form method="post" action="/tacview/{{ f.id }}/delete" style="display:inline"
+            onsubmit="return confirm('删除 {{ f.original_filename }} 的战斗分析？磁盘转换产物会一并删除，此操作不可撤销。')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn danger small" type="submit" style="padding:1px 8px;font-size:11px">删除</button>
+      </form>
+      {% endif %}
+    </span>
+  </h3>
+
+  {% if f.vm_json %}
+  <div class="stat-row" style="margin:6px 0 10px">
+    <div class="stat"><span class="v">{{ f.human_pilots }}</span><span class="k">飞行员</span></div>
+    <div class="stat"><span class="v">{{ f.landed_pilots }}</span><span class="k">降落</span></div>
+    <div class="stat"><span class="v">{{ f.ejected_or_shot_pilots }}</span><span class="k">弹射/被击落</span></div>
+    <div class="stat"><span class="v">{{ f.total_shots }}</span><span class="k">射击</span></div>
+    <div class="stat"><span class="v">{{ f.total_hits }}</span><span class="k">命中</span></div>
+    <div class="stat"><span class="v">{{ f.total_kills }}</span><span class="k">击杀</span></div>
+    <div class="stat"><span class="v">{{ f.total_misses }}</span><span class="k">未中/被拦截</span></div>
+  </div>
+  <table>
+    <thead><tr><th>飞行员</th><th class="num">射击</th><th class="num">命中</th>
+               <th class="num">击杀</th><th class="num">未中</th>
+               <th class="num">空空 射/中/杀</th><th class="num">空地 射/中/杀</th>
+               <th>飞行结局</th><th class="num">飞行时长</th></tr></thead>
+    <tbody>
+      {% for p in vm.pilots %}
+      <tr>
+        <td>{{ p.pilot }}</td>
+        <td class="num">{{ p.totals.shots }}</td>
+        <td class="num">{{ p.totals.hits }}</td>
+        <td class="num">{{ p.totals.kills }}</td>
+        <td class="num">{{ p.totals.misses }}</td>
+        <td class="num">{{ p.totalsAA.shots }}/{{ p.totalsAA.hits }}/{{ p.totalsAA.kills }}</td>
+        <td class="num">{{ p.totalsAG.shots }}/{{ p.totalsAG.hits }}/{{ p.totalsAG.kills }}</td>
+        <td>
+          {% if p.flightEnd == 'Landed' %}<span class="badge ok">已降落</span>
+          {% elif p.flightEnd == 'Ejected' %}<span class="badge warn">弹射</span>
+          {% elif p.flightEnd == 'Shot down' %}<span class="badge danger">被击落</span>
+          {% else %}<span class="badge">—</span>{% endif %}
+        </td>
+        <td class="num small">{{ p.flightTime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:8px 0 14px">
+    来自 Tacview 战斗事件（{{ '由 .acmi 自动转换，推断口径' if f.source_format == 'acmi' else 'Tacview 导出' }}），
+    与上方来自 .acmi 架次的时长/航程口径不同，不互相校验。
+    <a href="/tacview/{{ f.id }}">查看完整分析（击杀链 / 分武器 / 未中 / 被拦截）→</a>
+  </p>
+  {% else %}
+  <div class="flash error" style="margin-bottom:14px">
+    这份文件已归档，但解析失败（战斗分析未生成）：<code class="small">{{ f.parse_error or '未知原因' }}</code>
+  </div>
+  {% endif %}
+  {% else %}
+  <p class="small muted" style="margin:6px 0 0">
+    还没有战斗分析。在上方 <b>ACMI 工作台上传 .acmi 录像</b>后，
+    系统会自动推断"谁开火 / 命中了谁 / 摧毁了谁"并在这里展示击杀归属与武器效能
+    —— 这是 {{ files|length }} 份 ACMI 原件做不到的。归并确认后分析自动挂到本任务。
+  </p>
+  {% endfor %}
+</div>
+
 <div class="panel">
   <h2 style="margin-top:0">归档文件（{{ files|length }}）</h2>
   <table>

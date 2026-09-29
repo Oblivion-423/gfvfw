@@ -165,6 +165,11 @@ class UnitRec:
     on_map: bool = True
 
     aircraft_type: str = ""
+    #: 地面/海军编制单位的**类型名**（entityTypeId → CT → UCD.name，
+    #: 如 "Heavy Armored Battalion"）；飞行单位留空（用 aircraft_type）。
+    unit_type: str = ""
+    #: UCD ``MainRole`` 的可读名（按 CT Domain 区分，如 Armor / Infantry）。
+    unit_role: str = ""
     mission_code: Optional[int] = None
     mission_name: str = ""
     current_wp: int = 0
@@ -412,6 +417,42 @@ def _aircraft_type_name(theater, u: Unit) -> str:
     return ""
 
 
+def _unit_type_info(theater, u: Unit) -> tuple[str, str, list[str]]:
+    """地面/海军编制单位 → ``(类型名, 主战角色, 编成载具名列表)``。
+
+    链路与飞行侧同源：``entityTypeId → CT → EntityIdx → UCD``（UcdTable），
+    载具名再经 ``UCD.VehicleCtIdx_0..15 → VCD``。theater 缺失或查不到时
+    返回 ``("", "", [])`` —— 与 :func:`_aircraft_type_name` 的兜底口径一致，
+    单位记录照常保留，只是"具体类型"一栏为空。
+    """
+    if theater is None or not u.entity_type_id:
+        return "", "", []
+    fn = getattr(theater, "unit_def_by_entity_type", None)
+    if not callable(fn):
+        return "", "", []
+    try:
+        ucd = fn(u.entity_type_id)
+    except Exception:                                   # noqa: BLE001
+        return "", "", []
+    if ucd is None:
+        return "", "", []
+    type_name = str(getattr(ucd, "name", "") or "")
+    role = ""
+    try:
+        from .theater import main_role_name
+        role = main_role_name(int(ucd.main_role), int(ucd.domain))
+    except Exception:                                   # noqa: BLE001
+        role = ""
+    vehicles: list[str] = []
+    fn = getattr(theater, "vehicle_names", None)
+    if callable(fn):
+        try:
+            vehicles = [str(v) for v in (fn(ucd) or [])]
+        except Exception:                               # noqa: BLE001
+            vehicles = []
+    return type_name, role, vehicles
+
+
 def _callsign(theater, callsign_id: Any, callsign_num: Any) -> str:
     fn = getattr(theater, "get_callsign", None)
     if callable(fn):
@@ -553,9 +594,11 @@ def _unit_to_rec(u: Unit, theater, warnings: list[str]) -> UnitRec:
         r.division = e.get("division")
         par = e.get("parent_id") or e.get("aobj")
         r.parent_unit_id = par.num if par else None
+        r.unit_type, r.unit_role, r.vehicles = _unit_type_info(theater, u)
     elif u.unit_kind == "TaskForce":
         r.supply = e.get("supply")
         r.orders = e.get("orders")
+        r.unit_type, r.unit_role, r.vehicles = _unit_type_info(theater, u)
     elif u.unit_kind == "Package":
         r.mission_code = None
         r.total_wp = 0

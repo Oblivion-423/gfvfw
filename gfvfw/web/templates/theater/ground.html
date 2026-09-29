@@ -20,17 +20,24 @@
   <div class="empty">这份存档里没有地面单位。</div>
 {% else %}
   <table>
+    <thead>
     <tr>
-      <th>编号</th><th>类型</th><th>归属</th>
+      <th>编号</th><th>类型</th><th>具体类型</th><th>归属</th>
       <th>位置（东, 北）</th><th>目标位置</th>
       <th class="num">补给</th><th class="num">士气</th><th class="num">疲劳</th>
       <th class="num">航向</th><th class="num">损失</th>
-      <th class="num">移动</th><th class="num">建制</th>
+      <th class="num">移动</th><th class="num">建制</th><th>编成载具</th>
     </tr>
+    </thead>
+    <tbody>
     {% for u in ground %}
       <tr>
         <td class="mono">#{{ u.unit_id }}</td>
         <td>{{ unit_kind_cn.get(u.unit_kind, u.unit_kind) }}</td>
+        <td>
+          {% if u.unit_type %}<strong>{{ u.unit_type }}</strong>{% else %}<span class="muted" title="theater 数据缺失或该实体类型没有单位定义">—</span>{% endif %}
+          {% if u.unit_role %}<span class="badge accent">{{ u.unit_role }}</span>{% endif %}
+        </td>
         <td class="nowrap">{{ team_names.get(u.team_id, '#' ~ u.team_id) }}</td>
         <td class="mono">{{ u.grid_x|round(0)|int }}, {{ u.grid_y|round(0)|int }}</td>
         <td class="mono">
@@ -43,9 +50,18 @@
         <td class="num">{{ u.losses }}</td>
         <td class="num">{{ u.moved }}</td>
         <td class="num">{{ u.division if u.division is not none else '—' }}</td>
+        <td class="small">
+          {% set vlist = u.vehicles_json|fromjson %}
+          {% if vlist %}{{ vlist|join('、') }}{% else %}<span class="muted">—</span>{% endif %}
+        </td>
       </tr>
     {% endfor %}
+    </tbody>
   </table>
+  <div class="small muted" style="margin-top:8px">
+    「具体类型」与「编成载具」来自剧场数据的单位定义表（entityTypeId → CT →
+    Falcon4_UCD → Falcon4_VCD）。theater 数据未配置时显示 —。
+  </div>
 {% endif %}
 
 <h2>海军单位（特混舰队）</h2>
@@ -53,14 +69,20 @@
   <div class="empty">这份存档里没有海军单位。</div>
 {% else %}
   <table>
+    <thead>
     <tr>
-      <th>编号</th><th>归属</th><th>位置（东, 北）</th><th>目标位置</th>
+      <th>编号</th><th>具体类型</th><th>归属</th><th>位置（东, 北）</th><th>目标位置</th>
       <th class="num">补给</th><th class="num">命令</th><th class="num">损失</th>
-      <th>被谁发现</th>
+      <th>编成舰艇</th><th>被谁发现</th>
     </tr>
+    </thead>
+    <tbody>
     {% for u in naval %}
       <tr>
         <td class="mono">#{{ u.unit_id }}</td>
+        <td>
+          {% if u.unit_type %}<strong>{{ u.unit_type }}</strong>{% else %}<span class="muted">—</span>{% endif %}
+        </td>
         <td class="nowrap">{{ team_names.get(u.team_id, '#' ~ u.team_id) }}</td>
         <td class="mono">{{ u.grid_x|round(0)|int }}, {{ u.grid_y|round(0)|int }}</td>
         <td class="mono">
@@ -69,9 +91,14 @@
         <td class="num">{{ u.supply if u.supply is not none else '—' }}</td>
         <td class="num">{{ u.orders if u.orders is not none else '—' }}</td>
         <td class="num">{{ u.losses }}</td>
+        <td class="small">
+          {% set vlist = u.vehicles_json|fromjson %}
+          {% if vlist %}{{ vlist|join('、') }}{% else %}<span class="muted">—</span>{% endif %}
+        </td>
         <td class="small">{% if u.spotted_by_json and u.spotted_by_json != '[]' %}{{ u.spotted_by_json }}{% else %}<span class="muted">—</span>{% endif %}</td>
       </tr>
     {% endfor %}
+    </tbody>
   </table>
   <div class="small muted" style="margin-top:8px">
     「被谁发现」是存档里 <code>spotted</code> 位掩码解出的队伍号（只取低 8 位）。

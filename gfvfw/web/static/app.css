@@ -306,3 +306,23 @@ input[type=checkbox] { width: 15px; height: 15px; cursor: pointer; accent-color:
 /* 步骤条在这里同时充当阶段跳转，做一点可点击的暗示 */
 a.step:hover { border-color: var(--accent-dim); color: var(--accent); text-decoration: none; }
 
+/* ==========================================================================
+   战役记录 · 一层战役卡片
+   ========================================================================== */
+.card-grid {
+  display: grid; gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+}
+.camp-card {
+  display: block;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 15px 16px;
+  color: var(--fg); text-decoration: none;
+}
+.camp-card:hover {
+  border-color: var(--accent-dim); text-decoration: none;
+  background: var(--bg-elevated);
+}
+

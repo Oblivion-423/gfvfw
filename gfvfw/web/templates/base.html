@@ -36,7 +36,7 @@
               飞行记录 <span class="caret">▼</span>
             </a>
             <div class="nav-sub">
-              <a href="/log/campaign" class="{{ 'active' if current_path == '/log/campaign' else '' }}">战役记录</a>
+              <a href="/log/campaign" class="{{ 'active' if current_path.startswith('/log/campaign') else '' }}">战役记录</a>
               <a href="/log/training" class="{{ 'active' if current_path == '/log/training' else '' }}">训练记录</a>
               <a href="/log/pilots" class="{{ 'active' if current_path == '/log/pilots' else '' }}">飞行员个人记录</a>
               <div class="sep"></div>

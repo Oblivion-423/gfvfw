@@ -56,6 +56,15 @@ def test_acmi_web_suite():
     _assert_no_failures(_load("acmi_web_selfcheck.py"), "acmi_web")
 
 
+def test_tacview_suite():
+    """Tacview「Export Flight Log」XML 上传 → 战斗分析（击杀链/武器效能）。
+
+    与 ``.acmi`` 摄入平行的另一条通路：XML 事件不产生架次，
+    只做 ``.acmi`` 做不到的击杀归属分析（分析器内置自 TacviewLogAnalyzer）。
+    """
+    _assert_no_failures(_load("tacview_selfcheck.py"), "tacview")
+
+
 def test_stats_suite():
     _assert_no_failures(_load("stats_selfcheck.py"), "stats")
 

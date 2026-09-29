@@ -1,0 +1,351 @@
+{# ==========================================================================
+   战场态势图 · 地图本体（共用 partial）
+
+   被**两处** include，行为必须完全一致：
+       战场态势图页     /theater/{id}/map   （宿主先 {% set map_url = "/theater/" ~ campaign.id ~ "/map" %}）
+       战役管理详情页   /theater/{id}       （宿主先 {% set map_url = "/theater/" ~ campaign.id %}）
+   图层切换链接指向 ``map_url`` —— 在哪页渲染就留在哪页，不跳走。
+
+   需要的上下文（routers/theater.py 的 _situation_ctx() + _map_ctx() 提供）：
+       campaign, grid, palette, objectives, units, layer, all_count,
+       sel_map, sel_map_idx, maps_off, sam_assume_radius, nm_to_grid,
+       bullseye, unit_kind_cn, map_url
+
+   坐标：BMS 战役网格 0–1023，原点在**西南角**，x=东、y=北，每格 1 km。
+   SVG 的 y 轴朝下，所以纵向要做 1024 - north 的翻转。
+   地图是**正方形**（4096²/8192²/16384²），正好一格对一格铺满 viewBox；
+   1 海里 = 1.852 格。缩放/平移靠直接改 SVG 的 viewBox（原生能力，无依赖）；
+   比例尺按 `getScreenCTM()` 反算当前实际比例，所以缩放后依然准确。
+   ========================================================================== #}
+{% set G = grid %}
+{% macro color_for(tid) -%}
+  {%- if tid is none or tid < 0 -%}#5a6472{%- else -%}{{ palette[tid % 8] }}{%- endif -%}
+{%- endmacro %}
+
+{# ── 控制条 ── #}
+<div class="row" style="margin-bottom:8px">
+  <span class="small muted">目标点</span>
+  <a class="btn {{ 'ghost' if layer == 'all' else '' }}"
+     href="{{ map_url }}?layer=key{% if sel_map %}&map={{ sel_map_idx }}{% elif maps_off %}&map=none{% endif %}">仅要点</a>
+  <a class="btn {{ 'ghost' if layer == 'key' else '' }}"
+     href="{{ map_url }}?layer=all{% if sel_map %}&map={{ sel_map_idx }}{% elif maps_off %}&map=none{% endif %}">全部（{{ all_count }}）</a>
+
+  <span class="spacer"></span>
+  <span class="small muted">
+    {{ objectives|length }} 个目标点 · {{ units|length }} 个单位
+  </span>
+</div>
+
+{# ── 地图本体 ── #}
+<div class="panel tight" style="padding:10px;position:relative">
+  <div style="position:relative">
+    <svg id="sitemap" viewBox="0 0 {{ G }} {{ G }}" width="100%"
+         style="max-height:78vh;display:block;background:#0d1117;
+                border:1px solid var(--border);border-radius:6px;cursor:grab;
+                touch-action:none">
+      <defs>
+        <pattern id="grid" width="128" height="128" patternUnits="userSpaceOnUse">
+          <path d="M 128 0 L 0 0 0 128" fill="none" stroke="#1c2430" stroke-width="0.6"/>
+        </pattern>
+      </defs>
+
+      {# 底图：正方形剧场图，一格对一格铺满 viewBox #}
+      {% if sel_map %}
+        <image id="basemap" href="/theater/{{ campaign.id }}/map/image/{{ sel_map_idx }}"
+               x="0" y="0" width="{{ G }}" height="{{ G }}"
+               preserveAspectRatio="none" opacity="0.9"/>
+        <rect id="dim" width="{{ G }}" height="{{ G }}" fill="#000" opacity="0.25"
+              pointer-events="none"/>
+      {% else %}
+        <rect width="{{ G }}" height="{{ G }}" fill="url(#grid)"/>
+      {% endif %}
+
+      {# ── SAM 威胁环 ──
+         存档里**不记录每个 SAM 阵地是哪一型系统**（目标点只有 "SAM / AAA Site"
+         这一个类型名），所以逐点画不同半径做不到。只有在用户显式指定某一型号
+         （?sam=SA-20）时，才按该型号**真实射程**画统一环 —— 这是一个透明的
+         "假设全部为该型号"视图，不是实测结果。 #}
+      {% if sam_assume_radius %}
+      <g opacity="0.45" pointer-events="none">
+        {% for o in objectives %}
+          {% if o.type_name in ('SAM / AAA Site', 'SAM Site (Dedicated)') %}
+            <circle cx="{{ o.grid_x }}" cy="{{ G - o.grid_y }}"
+                    r="{{ (nm_to_grid * sam_assume_radius)|round(1) }}"
+                    fill="none" stroke="#ff8a3d"
+                    stroke-width="0.9" stroke-dasharray="6 4"/>
+          {% endif %}
+        {% endfor %}
+      </g>
+      {% endif %}
+
+      {# ── 目标点 ── #}
+      <g>
+        {% for o in objectives %}
+          {% set big = o.type_name in ('Airbase','Airstrip','Army Base','Headquarters','Port') %}
+          {% set w = 5 if big else 3 %}
+          <rect x="{{ o.grid_x - w/2 }}" y="{{ G - o.grid_y - w/2 }}"
+                width="{{ w }}" height="{{ w }}"
+                fill="{{ color_for(o.team_id) }}"
+                opacity="{{ 0.95 if big else 0.6 }}">
+            <title>{{ o.name }} · {{ o.type_name }} ·
+                    {{ '中立' if o.team_id < 0 else '队伍 ' ~ o.team_id }} ·
+                    ({{ o.grid_x|round(1) }}, {{ o.grid_y|round(1) }})</title>
+          </rect>
+        {% endfor %}
+      </g>
+
+      {# ── 单位：按类型用不同形状，颜色随归属 ── #}
+      <g>
+        {% for u in units %}
+          {% if u.unit_kind == 'Flight' %}
+            <polygon points="{{ u.grid_x }},{{ G - u.grid_y - 5 }}
+                              {{ u.grid_x - 4.5 }},{{ G - u.grid_y + 3.5 }}
+                              {{ u.grid_x + 4.5 }},{{ G - u.grid_y + 3.5 }}"
+                     fill="{{ color_for(u.team_id) }}" opacity="0.92">
+              <title>飞行 {{ u.callsign }} · {{ u.aircraft_type or '未知机型' }} ·
+                     任务 {{ u.mission_name or '—' }} · 航路点 {{ u.current_wp }}/{{ u.total_wp }} ·
+                     队伍 {{ u.team_id }}</title>
+            </polygon>
+          {% elif u.unit_kind == 'Package' %}
+            <circle cx="{{ u.grid_x }}" cy="{{ G - u.grid_y }}" r="3.6"
+                    fill="none" stroke="{{ color_for(u.team_id) }}" stroke-width="1.6">
+              <title>编队 #{{ u.unit_id }} · 队伍 {{ u.team_id }}</title>
+            </circle>
+          {% elif u.unit_kind == 'Squadron' %}
+            <rect x="{{ u.grid_x - 3 }}" y="{{ G - u.grid_y - 3 }}" width="6" height="6"
+                  transform="rotate(45 {{ u.grid_x }} {{ G - u.grid_y }})"
+                  fill="{{ color_for(u.team_id) }}" opacity="0.85">
+              <title>中队 {{ u.name }} · 队伍 {{ u.team_id }}</title>
+            </rect>
+          {% elif u.unit_kind in ('Battalion','Brigade','Division') %}
+            <rect x="{{ u.grid_x - 3 }}" y="{{ G - u.grid_y - 3 }}" width="6" height="6"
+                  fill="{{ color_for(u.team_id) }}" opacity="0.85">
+              <title>{{ unit_kind_cn.get(u.unit_kind, u.unit_kind) }} #{{ u.unit_id }} ·
+                     队伍 {{ u.team_id }} ·
+                     补给 {{ u.supply if u.supply is not none else '—' }} ·
+                     士气 {{ u.morale if u.morale is not none else '—' }}</title>
+            </rect>
+          {% else %}
+            <circle cx="{{ u.grid_x }}" cy="{{ G - u.grid_y }}" r="3"
+                    fill="{{ color_for(u.team_id) }}" opacity="0.85">
+              <title>{{ unit_kind_cn.get(u.unit_kind, u.unit_kind) }} #{{ u.unit_id }} · 队伍 {{ u.team_id }}</title>
+            </circle>
+          {% endif %}
+        {% endfor %}
+      </g>
+
+      {# ── 靶心 ── #}
+      <g id="bullseye" stroke="#ffffff" stroke-width="1.2" opacity="0.9" pointer-events="none">
+        <line x1="{{ bullseye[0] - 9 }}" y1="{{ G - bullseye[1] }}"
+              x2="{{ bullseye[0] + 9 }}" y2="{{ G - bullseye[1] }}"/>
+        <line x1="{{ bullseye[0] }}" y1="{{ G - bullseye[1] - 9 }}"
+              x2="{{ bullseye[0] }}" y2="{{ G - bullseye[1] + 9 }}"/>
+        <circle cx="{{ bullseye[0] }}" cy="{{ G - bullseye[1] }}" r="5" fill="none"/>
+      </g>
+    </svg>
+
+    {# 比例尺 + 坐标读数：叠在地图右下角 #}
+    <div id="scalebox" style="position:absolute;right:10px;bottom:10px;
+         background:rgba(13,17,23,.82);border:1px solid var(--border);
+         border-radius:4px;padding:5px 8px;font-size:11px;line-height:1.5;
+         pointer-events:none">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span id="scalelabel" style="min-width:96px">—</span>
+      </div>
+      <div style="height:6px;border-left:1px solid #8b95a5;border-right:1px solid #8b95a5;
+                  border-bottom:1px solid #8b95a5;margin-top:1px" id="scalebarwrap">
+        <div id="scalebar" style="height:100%;border-bottom:2px solid #cfd6e0;width:80px"></div>
+      </div>
+      <div id="zoomlabel" class="muted" style="margin-top:2px">视窗 1024 km</div>
+    </div>
+
+    {# 缩放按钮 #}
+    <div style="position:absolute;left:10px;top:10px;display:flex;gap:4px;flex-direction:column">
+      <button class="btn ghost" type="button" id="zin" title="放大" style="padding:2px 9px">+</button>
+      <button class="btn ghost" type="button" id="zout" title="缩小" style="padding:2px 9px">−</button>
+      <button class="btn ghost" type="button" id="zreset" title="复位到全图" style="padding:2px 7px;font-size:11px">全图</button>
+      <button class="btn ghost" type="button" id="zbull" title="居中到靶心" style="padding:2px 7px;font-size:11px">靶心</button>
+    </div>
+
+    {# 底图亮度 #}
+    {% if sel_map %}
+    <div style="position:absolute;left:10px;bottom:10px;background:rgba(13,17,23,.82);
+                border:1px solid var(--border);border-radius:4px;padding:5px 8px;font-size:11px">
+      <label for="dimr">底图亮度</label>
+      <input type="range" id="dimr" min="0" max="90" value="25" style="width:80px;vertical-align:middle">
+    </div>
+    {% endif %}
+
+    {# 光标坐标读数 #}
+    <div id="cursor" style="position:absolute;right:10px;top:10px;
+         background:rgba(13,17,23,.82);border:1px solid var(--border);
+         border-radius:4px;padding:4px 8px;font-size:11px;pointer-events:none">
+      拖动平移 · 滚轮缩放
+    </div>
+  </div>
+
+  <div class="small muted" style="margin-top:6px">
+    操作：<b>滚轮</b>缩放 · <b>拖动</b>平移 · 右侧比例尺按当前缩放实时换算（1 格 = 1 km）。
+    鼠标悬停任一元素可看详情。
+  </div>
+</div>
+
+<script>
+/* ─────────────────────────────────────────────────────────────────────
+   缩放/平移 + 比例尺。
+
+   全部基于 SVG 原生能力：改 viewBox 就是缩放与平移，没有第三方库。
+   比例尺**不是写死的**：用 getScreenCTM() 反算「一个用户单位 = 多少 CSS 像素」，
+   再据此算出当前比例下多大长度等于一个整数公里，所以缩放后依然准确。
+   因为战役网格 1 格 = 1 km，用户单位天然就是公里。
+   ⚠️ 本脚本随 partial 被**两处**宿主页面 include，但每页只渲染一份地图，
+   元素 id（sitemap/zin/dimr/…）不会撞车。
+   ───────────────────────────────────────────────────────────────────── */
+(function () {
+  var svg = document.getElementById('sitemap');
+  if (!svg) return;
+  var G = {{ grid }};
+  var vb = { x: 0, y: 0, w: G, h: G };
+  var raf = null;
+
+  function apply() {
+    svg.setAttribute('viewBox', vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h);
+    updateScale();
+  }
+  function schedule() {
+    if (raf) return;
+    raf = requestAnimationFrame(function () { raf = null; apply(); });
+  }
+
+  // 视窗不要跑出网格太远
+  function clampVb() {
+    var m = vb.w * 0.5;
+    var lo = -m, hi = G + m - vb.w;
+    vb.x = (hi <= lo) ? (lo + hi) / 2 : Math.min(Math.max(vb.x, lo), hi);
+    lo = -m; hi = G + m - vb.h;
+    vb.y = (hi <= lo) ? (lo + hi) / 2 : Math.min(Math.max(vb.y, lo), hi);
+  }
+
+  function zoomAt(gx, gy, factor) {
+    var nw = Math.min(Math.max(vb.w * factor, 2), G * 2);
+    var s = nw / vb.w;
+    vb.x = gx - (gx - vb.x) * s;
+    vb.y = gy - (gy - vb.y) * s;
+    vb.w = nw; vb.h = nw;
+    clampVb(); schedule();
+  }
+
+  function centerOn(gx, gy, width) {
+    if (width) { vb.w = width; vb.h = width; }
+    vb.x = gx - vb.w / 2;
+    vb.y = gy - vb.h / 2;
+    clampVb(); apply();
+  }
+
+  // 屏幕坐标 → 用户（网格）坐标
+  function toGrid(clientX, clientY) {
+    var ctm = svg.getScreenCTM();
+    if (!ctm) return null;
+    var inv = ctm.inverse();
+    var p = svg.createSVGPoint();
+    p.x = clientX; p.y = clientY;
+    var q = p.matrixTransform(inv);
+    return { x: q.x, y: q.y, ctm: ctm };
+  }
+
+  // ── 比例尺：把「CSS 像素 / 公里」反算出来，取一个整数公里刻度 ──
+  var bar = document.getElementById('scalebar');
+  var barLabel = document.getElementById('scalelabel');
+  var zoomLabel = document.getElementById('zoomlabel');
+  var KM_STEPS = [0.25, 0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 500];
+  var NM_PER_KM = 1 / 1.852;
+
+  function updateScale() {
+    if (!bar || !barLabel) return;
+    var ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    var pxPerKm = Math.abs(ctm.a);          // CSS 像素 / 用户单位（= 公里）
+    if (!pxPerKm) return;
+    var targetPx = 130;
+    var km = KM_STEPS[0];
+    for (var i = 0; i < KM_STEPS.length; i++) {
+      if (KM_STEPS[i] * pxPerKm <= targetPx) km = KM_STEPS[i];
+    }
+    bar.style.width = (km * pxPerKm).toFixed(1) + 'px';
+    var nm = km * NM_PER_KM;
+    barLabel.textContent = km + ' km / ' +
+      (nm >= 10 ? nm.toFixed(0) : nm.toFixed(1)) + ' NM';
+    if (zoomLabel) {
+      zoomLabel.textContent = '视窗 ' + Math.round(vb.w) + ' km · 1 km ≈ ' +
+        pxPerKm.toFixed(1) + ' px';
+    }
+  }
+
+  // ── 交互 ──
+  svg.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    var g = toGrid(e.clientX, e.clientY);
+    if (!g) return;
+    zoomAt(g.x, g.y, e.deltaY < 0 ? 0.82 : 1 / 0.82);
+  }, { passive: false });
+
+  var drag = null;
+  svg.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return;
+    drag = { sx: e.clientX, sy: e.clientY, vx: vb.x, vy: vb.y };
+    svg.style.cursor = 'grabbing';
+    try { svg.setPointerCapture(e.pointerId); } catch (_) {}
+  });
+
+  var cursorBox = document.getElementById('cursor');
+  svg.addEventListener('pointermove', function (e) {
+    var g = toGrid(e.clientX, e.clientY);
+    if (g && cursorBox) {
+      cursorBox.textContent = '东 ' + g.x.toFixed(1) + ' · 北 ' +
+        (G - g.y).toFixed(1) + ' km';
+    }
+    if (!drag) return;
+    var ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    var k = Math.abs(ctm.a) || 1;
+    vb.x = drag.vx - (e.clientX - drag.sx) / k;
+    vb.y = drag.vy - (e.clientY - drag.sy) / k;
+    clampVb(); schedule();
+  });
+
+  function endDrag(e) {
+    if (!drag) return;
+    drag = null;
+    svg.style.cursor = 'grab';
+    try { svg.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
+  svg.addEventListener('pointerup', endDrag);
+  svg.addEventListener('pointercancel', endDrag);
+
+  function bind(id, fn) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('click', fn);
+  }
+  bind('zin', function () { zoomAt(vb.x + vb.w / 2, vb.y + vb.h / 2, 0.7); });
+  bind('zout', function () { zoomAt(vb.x + vb.w / 2, vb.y + vb.h / 2, 1 / 0.7); });
+  bind('zreset', function () { vb = { x: 0, y: 0, w: G, h: G }; apply(); });
+  bind('zbull', function () { centerOn({{ bullseye[0] }}, {{ G - bullseye[1] }}, G / 4); });
+
+  // 底图亮度：0 = 全暗（相当于关掉底图），90 = 原图
+  var dimr = document.getElementById('dimr');
+  var dim = document.getElementById('dim');
+  var base = document.getElementById('basemap');
+  if (dimr && dim && base) {
+    dimr.addEventListener('input', function () {
+      var v = parseInt(dimr.value, 10) / 100;
+      base.setAttribute('opacity', (1 - v).toFixed(2));
+      dim.setAttribute('opacity', v.toFixed(2));
+    });
+  }
+
+  window.addEventListener('resize', updateScale);
+  // 底图加载完再量一次（首帧尺寸可能还没定）
+  if (base) base.addEventListener('load', updateScale);
+  apply();
+})();
+</script>
