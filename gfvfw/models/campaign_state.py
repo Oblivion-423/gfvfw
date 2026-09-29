@@ -306,6 +306,11 @@ class CampaignUnit(IdMixin, TimestampMixin, Base):
     squadron_unit_id: Mapped[Optional[int]] = mapped_column(Integer)
 
     #: 地面/海军专有
+    #: 编制单位的具体类型（entityTypeId → CT → UCD.name，如装甲营）；
+    #: 飞行单位为空（用 aircraft_type）。theater 数据缺失时为 NULL。
+    unit_type: Mapped[Optional[str]] = mapped_column(String(64))
+    #: UCD MainRole 的可读名（Armor / Infantry / AirDefense …），可按角色聚合
+    unit_role: Mapped[Optional[str]] = mapped_column(String(32))
     supply: Mapped[Optional[int]] = mapped_column(Integer)
     morale: Mapped[Optional[int]] = mapped_column(Integer)
     fatigue: Mapped[Optional[int]] = mapped_column(Integer)

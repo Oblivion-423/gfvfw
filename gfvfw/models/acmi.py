@@ -240,3 +240,68 @@ class ImportBatch(IdMixin, TimestampMixin, Base):
         Index("ix_import_batches_status", "status"),
         Index("ix_import_batches_mission", "suggested_mission_id"),
     )
+
+
+class TacviewXmlFile(IdMixin, TimestampMixin, Base):
+    """Tacview「Export Flight Log」XML 导出的归档与战斗分析结果。
+
+    ⚠️ 与 :class:`AcmiFile` 的关系：两者是**同一录像的两种表达** ——
+    ``.acmi`` 是流式姿态数据（产生架次/时长/航程），XML 导出是
+    Tacview 里「File → Export Flight Log」得到的**事件导出**
+    （谁开火 / 命中 / 摧毁 / 起降），因此能做 ``.acmi`` 侧做不了的
+    **击杀归属与命中链分析**。XML 事件不参与架次入库，只作分析展示。
+
+    ``vm_json`` 存 :func:`gfvfw.tacview_analyzer.build_pilot_view_model`
+    的完整输出。解析毫秒级完成，但数据可达数 MB —— 存 JSON 是一次
+    "解析一次、每次查看零成本"的取舍：分析结果只随文件变（sha256 去重），
+    不随名册/认领变，没有重算入口的必要。
+
+    生命周期：**ACMI 工作台上传 .acmi 时即生成**（``mission_id=None``），
+    归并确认时按 ``sha256`` 挂到任务上；任务删除（撤销归并）时摘下。
+    """
+
+    __tablename__ = "tacview_xml_files"
+
+    mission_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("missions.id"))
+    sha256: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: 相对 :data:`gfvfw.config.settings.storage_dir` 的路径（不存 BLOB）
+    stored_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    #: ``xml`` = 用户上传的 Tacview 导出；``acmi`` = 由上传的 .acmi 转换而来
+    #: （转换器见 :mod:`gfvfw.acmi_debrief`；stored_path 存的是转换产物）
+    source_format: Mapped[Optional[str]] = mapped_column(String(16))
+
+    # ---- 头部 ----
+    #: TacviewDebriefing/@Version
+    format_version: Mapped[Optional[str]] = mapped_column(String(16))
+    recorder: Mapped[Optional[str]] = mapped_column(String(64))
+    mission_title: Mapped[Optional[str]] = mapped_column(String(128))
+    #: Mission/Duration（秒）
+    mission_duration_seconds: Mapped[Optional[float]] = mapped_column(Float)
+
+    # ---- 事件统计（列表页/详情页不用解 vm_json 就能显示）----
+    event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    human_pilots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_shots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_hits: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_kills: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_misses: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: 击杀（含被击落方与弹射）之外的飞行结局 —— Landed / Ejected / Shot down
+    landed_pilots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ejected_or_shot_pilots: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    #: :func:`build_pilot_view_model` 的完整输出（pilots + overview）
+    vm_json: Mapped[Optional[str]] = mapped_column(Text)
+    #: 解析失败时的原因（vm_json 为空）；非空即"已归档但不可分析"
+    parse_error: Mapped[Optional[str]] = mapped_column(Text)
+
+    uploaded_by: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id"))
+
+    mission: Mapped["Mission"] = relationship()  # noqa: F821
+
+    __table_args__ = (
+        Index("ix_tacview_xml_mission", "mission_id"),
+    )

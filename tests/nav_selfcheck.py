@@ -178,15 +178,29 @@ def main() -> int:
                           "得到 %d" % r.status_code)
 
                 print("\n[4] 三个子页面的口径")
-                # 战役记录：只含归入战役的任务
+                # 战役记录**两层**：一层只列战役卡片，二层才是任务明细
                 r = client.get("/log/campaign")
-                check("战役记录含战役内任务", "战役任务-01" in r.text)
-                check("战役记录含战役内训练", "战役内训练-01" in r.text)
-                check("战役记录不含战役外训练", "日常训练-01" not in r.text)
+                check("战役记录一层列出战役", "测试战役" in r.text)
+                check("战役记录一层不平铺任务明细", "战役任务-01" not in r.text)
+                r = client.get("/log/campaign?campaign_id=%s" % cid,
+                               follow_redirects=False)
+                check("旧链接 ?campaign_id= 跳到战役明细页",
+                      r.status_code == 302
+                      and r.headers.get("location", "").startswith("/log/campaign/"),
+                      "得到 %d %s" % (r.status_code, r.headers.get("location", "")))
+                # 二层：只含该战役的任务
+                r = client.get("/log/campaign/%s" % cid)
+                check("战役明细含战役内任务", "战役任务-01" in r.text)
+                check("战役明细含战役内训练", "战役内训练-01" in r.text)
+                check("战役明细不含战役外训练", "日常训练-01" not in r.text)
                 # 任务维度的时长一律"只算一次"，标签也随之明确
-                check("战役记录显示汇总（日志总时长）", "日志总时长" in r.text)
-                check("战役记录注明按任务计", "多人飞同一任务只算一次" in r.text)
-                check("战役记录用海里", "NM" in r.text)
+                check("战役明细显示汇总（日志总时长）", "日志总时长" in r.text)
+                check("战役明细注明按任务计", "多人飞同一任务只算一次" in r.text)
+                check("战役明细用海里", "NM" in r.text)
+                # 一层卡片带战役级汇总（含"日志总时长"口径说明）
+                r = client.get("/log/campaign")
+                check("战役记录一层卡片带任务数汇总", "日志总时长" in r.text)
+                check("战役记录一层注明按任务计", "多人飞同一任务只算一次" in r.text)
 
                 # 训练记录：默认只看战役外训练
                 r = client.get("/log/training")

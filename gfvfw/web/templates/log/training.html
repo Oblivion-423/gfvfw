@@ -41,7 +41,7 @@
   </div>
 </form>
 
-{# 同 log/campaign.html：写操作只给队员，本页对游客开放 #}
+{# ACMI 工作台（写操作只给队员）—— 守卫在宿主页面 include 处 #}
 {% if acmi_any and principal.is_member %}{% include "acmi/_wizard.html" %}{% endif %}
 
 {% if totals.missions %}

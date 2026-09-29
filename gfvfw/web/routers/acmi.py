@@ -2,11 +2,14 @@
 ACMI 摄入：上传 → 解析 → 认领 → 归并确认。
 
 ⚠️ **本模块不提供任何独立页面。**
-按联队要求，ACMI 操作以「ACMI 工作台」内嵌区块的形式出现在业务页面里：
+按联队要求，ACMI 操作以「ACMI 工作台」区块的形式出现在业务页面里：
+不是占正文版面的内嵌表单，而是一个固定在右缘的**侧边按钮**，
+点开滑出抽屉（见 ``templates/acmi/_wizard.html``）：
 
-    飞行记录 · 战役记录   ``/log/campaign``        战役下拉可选，归并即归入该战役
-    飞行记录 · 训练记录   ``/log/training``        固定为日常训练（不归入战役）
-    战役管理 · 战役详情   ``/theater/{id}``        战役固定为当前战役，归并即归入
+    飞行记录 · 战役记录（一层）  ``/log/campaign``        归属战役可选，选了就归入
+    飞行记录 · 战役记录（二层）  ``/log/campaign/{id}``   战役固定为当前战役
+    飞行记录 · 训练记录          ``/log/training``        固定为日常训练（不归入战役）
+    战役管理 · 战役详情          ``/theater/{id}``        战役固定为当前战役，归并即归入
 
 本模块对外提供两样东西：
 
@@ -16,11 +19,12 @@ ACMI 摄入：上传 → 解析 → 认领 → 归并确认。
 旧路径 ``/acmi``、``/acmi/upload``、``/acmi/claim``、``/acmi/merge`` 一律 302 跳到
 宿主页面，保证旧书签与外部链接仍然可用。
 
-为什么不做页面而做内嵌区块
---------------------------
+为什么做成侧边按钮而不是独立页面
+--------------------------------
 上传本身没有独立语义 —— 它总是"为了往某个列表里补数据"。
-把它挂在列表页上，用户看到的上下文（这是哪场战役、这是训练还是战役）
-与即将生成的数据天然一致，也就省掉了"上传完再去手动归入战役"这一步。
+挂在业务页面旁，用户看到的上下文（这是哪场战役、这是训练还是战役）
+与即将生成的数据天然一致，也就省掉了"上传完再去手动归入战役"这一步；
+收进侧边按钮则让它不占正文版面，列表页保持以数据为主角。
 """
 
 from __future__ import annotations
@@ -58,6 +62,8 @@ ACMI_STAGES = ("upload", "claim", "merge")
 #:    拿它做重定向就是开放重定向漏洞。
 _RETURN_PATHS = ("/log/campaign", "/log/training")
 _RETURN_THEATER_RE = re.compile(r"^/theater/[A-Za-z0-9_-]{1,64}$")
+#: 战役记录二层（战役明细页）也是宿主页面 —— 战役锁定为该战役
+_RETURN_LOG_CAMPAIGN_RE = re.compile(r"^/log/campaign/[A-Za-z0-9_-]{1,64}$")
 DEFAULT_RETURN_TO = "/log/campaign"
 
 #: 工作台自己的查询参数 —— 计算"宿主页面其余筛选条件"时要排掉。
@@ -97,7 +103,8 @@ def safe_return_to(value: Optional[str]) -> str:
         return DEFAULT_RETURN_TO
     if "\r" in v or "\n" in v or "\\" in v:
         return DEFAULT_RETURN_TO
-    if v in _RETURN_PATHS or _RETURN_THEATER_RE.match(v):
+    if v in _RETURN_PATHS or _RETURN_THEATER_RE.match(v) \
+            or _RETURN_LOG_CAMPAIGN_RE.match(v):
         return v
     return DEFAULT_RETURN_TO
 
@@ -379,6 +386,13 @@ def acmi_delete(file_id: str, request: Request,
                          "parse_status": rec.parse_status},
                  reason=reason.strip() or "删除上传的 ACMI", request=request)
     db.delete(rec)
+    # 派生的战斗分析记录随 ACMI 一并删除（分析是这份文件的衍生物）
+    from ...models import TacviewXmlFile
+    from ...services import tacview as TV
+    tv = db.scalar(select(TacviewXmlFile).where(
+        TacviewXmlFile.sha256 == rec.sha256))
+    if tv is not None:
+        TV.delete_upload(db, tv)
     db.commit()
 
     # 磁盘原件一并删掉（解析结果已随行消失，留着只是垃圾）
@@ -591,7 +605,7 @@ def merge_confirm(request: Request,
                   file_ids: list[str] = Form(default=[]),
                   mission_name: str = Form(""),
                   mission_type: str = Form("other"),
-                  visibility: str = Form("members"),
+                  visibility: str = Form("public"),
                   campaign_id: str = Form(""),
                   csrf_token: str = Form(""),
                   principal: Principal = Depends(require(ACMI_CONFIRM)),

@@ -3,8 +3,8 @@
 
 导入本包即注册全部模型到 ``Base.metadata``，供建表与迁移使用。
 
-表清单见 docs/database-design.md §8（设计 28 张；实现期为"忽略飞行员名"
-新增 ``ignored_pilots``，共 29 张 —— 见表内注释说明原因）。
+表清单见 docs/database-design.md §8（实现期 30 张，含 ``ignored_pilots``
+与 ``tacview_xml_files`` —— 见表内注释说明原因）。
 """
 
 from .identity import (  # noqa: F401
@@ -18,6 +18,7 @@ from .flight import (  # noqa: F401
 )
 from .acmi import (  # noqa: F401
     AcmiActor, AcmiFile, AircraftAlias, IgnoredPilot, ImportBatch, PilotMapping,
+    TacviewXmlFile,
 )
 from .site import (  # noqa: F401
     Announcement, AuditLog, Document, EventRegistration, ForumPost,
@@ -36,7 +37,7 @@ __all__ = [
     "Campaign", "Mission", "Sortie", "SortieEvent", "UploadStatus",
     # acmi
     "AcmiFile", "AcmiActor", "PilotMapping", "AircraftAlias", "ImportBatch",
-    "IgnoredPilot",
+    "IgnoredPilot", "TacviewXmlFile",
     # site
     "SiteEvent", "EventRegistration", "Announcement", "ForumThread",
     "ForumPost", "Document", "AuditLog", "Setting",

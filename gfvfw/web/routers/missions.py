@@ -22,11 +22,14 @@ from ...models import AcmiFile, Campaign, Member, Mission, Sortie, SortieEvent
 from ...permissions import (
     CAMPAIGN_MANAGE, LOG_DELETE, LOG_EDIT_ANY, LOG_EDIT_OWN,
 )
+from ...permissions import ACMI_UPLOAD_ANY
 from ...services import campaigns as CS
+from ...services import tacview as TV
 from ...services.audit import record_audit
 from ..deps import Principal, get_db, require, require_login, require_member
 from ..forms import FieldError, local_input_value, parse_local_datetime
 from ..templating import render
+from .tacview import did_message
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +112,7 @@ def mission_edit_form(mission_id: str, request: Request,
             "name": m.name or "",
             "mission_number": m.mission_number or "",
             "mission_type": m.mission_type or "other",
-            "visibility": m.visibility or "members",
+            "visibility": m.visibility or "public",
             "base": m.base or "",
             "outcome": m.outcome or "",
             # ⚠️ 表单显示的是 **UTC+8**；存储始终 UTC
@@ -129,7 +132,7 @@ def mission_update(mission_id: str, request: Request,
                    name: str = Form(""),
                    mission_number: str = Form(""),
                    mission_type: str = Form("other"),
-                   visibility: str = Form("members"),
+                   visibility: str = Form("public"),
                    base: str = Form(""),
                    outcome: str = Form(""),
                    started_at: str = Form(""),
@@ -238,6 +241,14 @@ def mission_delete(mission_id: str, request: Request,
         f.mission_id = None
         # 批次也一并清掉：该批次已被"撤销归并"，留着会显示成"待确认"
         f.batch_id = None
+
+    # 战斗分析记录随 ACMI 一起摘下（重新归并时会按 sha256 再挂上）
+    from ...models import TacviewXmlFile
+    from ...services import tacview as TV
+    for tv in db.scalars(
+            select(TacviewXmlFile).where(TacviewXmlFile.mission_id == m.id)):
+        tv.mission_id = None
+        log.info("战斗分析 %s 已随任务撤销归并摘下", TV.absolute_path(tv))
 
     m.deleted_at = now
     db.flush()
@@ -374,6 +385,7 @@ def mission_detail(mission_id: str, request: Request,
 
     campaign = db.get(Campaign, mission.campaign_id) if mission.campaign_id else None
 
+    tacview_files = TV.list_for_mission(db, mission.id)
     return render(request, "missions/detail.html", {
         "mission": mission,
         "campaign": campaign,
@@ -387,4 +399,9 @@ def mission_detail(mission_id: str, request: Request,
         "confidence_labels": CONFIDENCE_LABELS,
         "confidence_badge": CONFIDENCE_BADGE,
         "event_labels": EVENT_LABELS,
+        # ---- Tacview 战斗分析区块（分析随 ACMI 工作台上传自动生成）----
+        "tacview_files": tacview_files,
+        "tacview_did_message": did_message(request.query_params.get("did", "")),
+        "tacview_error": request.query_params.get("error", ""),
+        "tacview_can_manage_any": principal.can(ACMI_UPLOAD_ANY),
     })

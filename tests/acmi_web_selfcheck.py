@@ -370,8 +370,12 @@ def main() -> int:
                 check("列出待归并文件", f1.name in r.text)
                 check("已认领名字标绿（badge ok）", 'badge ok">Oblivion' in r.text)
                 check("归并阶段含确认按钮", "确认归并并创建任务" in r.text)
-                check("战役记录页的战役被锁定（无第二个下拉）",
-                      'id="acmiCampaign"' not in r.text)
+                # 一层不针对某场战役 → 归属战役下拉可见（不锁定）
+                check("战役记录一层不锁定战役（有归属战役下拉）",
+                      'id="acmiCampaign"' in r.text)
+                # ★ 上传默认可见性为公开（2026-09 联队口径）
+                check("归并表单默认可见性为公开",
+                      '<option value="public" selected>' in r.text)
                 check("训练记录页把类型锁成 training",
                       'name="mission_type" value="training"'
                       in client.get("/log/training?acmi=merge").text)
@@ -528,6 +532,9 @@ def main() -> int:
                 mp = client.get("/log/campaign?acmi=merge&campaign_id=%s" % cid)
                 check("工作台记住选定战役",
                       'name="campaign_id" value="%s"' % cid in mp.text)
+                # ?campaign_id= 会被 302 到战役明细页；二层把战役锁死
+                check("战役记录二层锁定战役（无第二个下拉）",
+                      'id="acmiCampaign"' not in mp.text)
 
                 r = client.post("/acmi/merge",
                                 data={"file_ids": [rec3_id],

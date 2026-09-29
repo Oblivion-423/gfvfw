@@ -287,7 +287,7 @@
 | `brief` | TEXT | NULL | 任务简报（Markdown） |
 | `debrief` | TEXT | NULL | 战报正文 |
 | `outcome` | TEXT | NULL | `success` / `partial` / `failure` / `aborted` |
-| `visibility` | TEXT | NOT NULL DEFAULT `members` | D6：公开=战报精选，内部=完整日志 |
+| `visibility` | TEXT | NOT NULL DEFAULT `public` | D6：上传默认公开（所有注册用户可见，2026-09 联队口径）；内部/指挥层留给确需控制范围的任务 |
 | `acmi_completeness` | TEXT | NOT NULL DEFAULT `unknown` | §5.1：`complete` / `partial` / `missing` |
 | `confirmed_by` | TEXT | FK→users, NULL | 归并确认人 |
 | `confirmed_at` | TEXT | NULL | |
@@ -533,6 +533,50 @@
 
 文件与任务的最终归属写在 `acmi_files.mission_id`（一份文件只归一个任务）。
 若将来需要"一份文件贡献给多个任务"，再引入 `acmi_file_missions` 关联表 —— **一期不做**。
+
+### 4.7 `tacview_xml_files` —— Tacview XML 导出与战斗分析（2026-09 新增，第 30 张）
+
+来源：Tacview 里「File → Export Flight Log」导出的 **XML 事件文件**，或**直接上传
+`.acmi` 录像** —— 上传 `.acmi` 时由转换器（`gfvfw/acmi_debrief.py`，2026-09 新增）
+从轨迹数据自动推断出等价的战斗事件（实测 BMS 4.38 的 ACMI **不含**任何战斗事件属性，
+Tacview 导出 XML 时同样是推断的；推断阈值均以真实录像实测分布为依据，
+详见模块 docstring）。XML 导出带结构化事件（谁开火 / 命中了谁 / 摧毁了谁 /
+起飞降落），因此能做 `.acmi` 直接入库侧做不到的**击杀归属与命中链分析**。
+分析器内置自
+[TacviewLogAnalyzer 0.1.6](https://github.com/oakdesign/TacviewLogAnalyzer)（MIT，
+`gfvfw/tacview_analyzer/`，核心逐字节未改）。
+
+⚠️ **与 `.acmi` 摄入的关系**：同一录像的两种表达，两条平行通路。
+`.acmi` → 架次入库（时长/航程/起降）；XML → 只做战斗分析展示，**不产生架次**。
+页面口径不同，**不互相校验**。
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `mission_id` | TEXT FK→missions, NULL | 挂在哪个任务（上传入口在任务详情页） |
+| `sha256` | TEXT UNIQUE NOT NULL | 内容去重 —— 同一文件重复上传不重复入库 |
+| `source_format` | TEXT NULL | `xml` = Tacview 导出；`acmi` = 由上传的 .acmi 转换（stored_path 存转换产物） |
+| `original_filename` / `stored_path` / `size_bytes` | | 与 `acmi_files` 同策略：落盘 `tacview/<年月>/`，不存 BLOB |
+| `format_version` / `recorder` / `mission_title` / `mission_duration_seconds` | NULL | 导出文件头部 |
+| `event_count` / `human_pilots` | NOT NULL | 事件数 / 飞行员数（列表页免解 `vm_json` 即可显示） |
+| `total_shots` / `total_hits` / `total_kills` / `total_misses` | NOT NULL | 汇总（命中/击杀按"成功的射击"去重计） |
+| `landed_pilots` / `ejected_or_shot_pilots` | NOT NULL | 飞行结局汇总 |
+| `vm_json` | TEXT NULL | `build_pilot_view_model` 完整输出（击杀链/分武器/空空空地拆分） |
+| `parse_error` | TEXT NULL | 解析失败原因（原件仍归档，页面如实标注） |
+| `uploaded_by` | FK→users, NULL | 上传人（他人文件的操作需 `acmi.upload.any`） |
+
+**为什么分析结果存 JSON 而无重算入口**：分析只取决于**文件内容**（sha256 去重），
+不随名册/认领变化 —— 解析一次存快照，查看零成本；分析器升级后用
+「重新解析」用已归档原件回填。
+
+**生命周期（2026-09 起）**：**ACMI 工作台上传 .acmi 时即自动生成分析**
+（`ingest_file` → `analyze_acmi_archive`，此时 `mission_id=NULL`），
+归并确认时按 `sha256` 挂到任务（`confirm_merge`）；任务详情页**内嵌展示**
+概要与每名飞行员统计，完整击杀链在 `/tacview/{id}`。任务删除（撤销归并）
+时分析摘下（`mission_id` 清空，重新归并自动挂回）；删除 ACMI 原件时
+派生的分析一并删除。任务详情页不再设独立上传入口（`/tacview/upload`
+路由保留给 XML 导出与脚本用法）。
+
+**索引**：`mission_id`
 
 ---
 
@@ -983,13 +1027,13 @@ ACMI 内 # 时间戳  =  任务开始以来的相对秒数（以任务开始为 
 
 ### 对应数据库字段（`sorties`）
 
-## 8. 表清单速查（共 28 张）
+## 8. 表清单速查（共 30 张）
 
 | 层 | 表 |
 |---|---|
 | 身份权限 | `users` `members` `ranks` `qualifications` `member_qualifications` `aircraft_types` `roles` `role_permissions` `member_roles` `applications` |
 | 飞行数据 | `campaigns` `missions` `sorties` `sortie_events` `upload_status` |
-| ACMI 摄入 | `acmi_files` `acmi_actors` `pilot_mappings` `aircraft_aliases` `import_batches` |
+| ACMI 摄入 | `acmi_files` `acmi_actors` `pilot_mappings` `aircraft_aliases` `import_batches` `tacview_xml_files` |
 | 运营 | `events` `event_registrations` `announcements` `forum_threads` `forum_posts` `documents` |
 | 审计配置 | `audit_log` `settings` |
 

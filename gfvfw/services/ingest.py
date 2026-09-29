@@ -186,6 +186,15 @@ class AcmiIngestService:
         self._store_actors(db, rec, info, result)
         db.flush()
 
+        # ---- 战斗分析（Tacview 转换）—— 与摄入同链路，失败不影响架次数据 ----
+        # 生成的分析记录 mission_id=None，归并确认时按 sha256 挂到任务上。
+        try:
+            from . import tacview as TV
+            TV.analyze_acmi_archive(db, rec, uploaded_by=uploaded_by)
+        except Exception:                              # noqa: BLE001
+            log.warning("战斗分析失败 %s（不影响 ACMI 入库）",
+                        filename, exc_info=True)
+
         result.warnings.extend(info.warnings)
         return result
 
@@ -385,7 +394,7 @@ class AcmiIngestService:
                       confirmed_by: Optional[str] = None,
                       mission_name: Optional[str] = None,
                       mission_type: str = "other",
-                      visibility: str = "members",
+                      visibility: str = "public",
                       campaign_id: Optional[str] = None,
                       create_events: bool = True) -> Mission:
         """确认归并并正式入库：创建 Mission + Sortie（仅名册命中者）。
@@ -426,6 +435,17 @@ class AcmiIngestService:
             f.mission_id = mission.id
             created += self._create_sorties_for_file(
                 db, mission, f, create_events=create_events)
+
+        # 战斗分析记录随 ACMI 一起归入任务（只认领还挂空的分析行，
+        # 不动已属于其它任务的）
+        from .tacview import TacviewXmlFile
+        shas = [f.sha256 for f in files]
+        if shas:
+            for tv in db.scalars(
+                    select(TacviewXmlFile).where(
+                        TacviewXmlFile.sha256.in_(shas),
+                        TacviewXmlFile.mission_id.is_(None))):
+                tv.mission_id = mission.id
 
         batch.status = "imported"
         batch.suggested_mission_id = mission.id

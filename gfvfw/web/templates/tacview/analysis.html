@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}战斗分析 · {{ rec.original_filename }} · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="small"><a href="/missions{% if mission %}/{{ mission.id }}{% endif %}">← 返回任务</a></div>
+    <h1>战斗分析 · {{ mission.name if mission else rec.original_filename }}</h1>
+    <div class="sub">
+      <code class="small">{{ rec.original_filename }}</code>
+      {% if rec.source_format == 'acmi' %}
+        <span class="badge" title="战斗事件由 .acmi 轨迹自动推断（开火/命中/击杀为推断口径）">由 .acmi 自动转换</span>
+      {% endif %}
+      {% if rec.recorder %} · 录制 {{ rec.recorder }}{% endif %}
+      {% if rec.format_version %} · 导出版本 {{ rec.format_version }}{% endif %}
+      {% if rec.mission_duration_seconds %} · 任务时长 {{ rec.mission_duration_seconds|int|dur }}{% endif %}
+      · 分析器 TacviewLogAnalyzer（MIT，内置）
+    </div>
+  </div>
+  <div class="row">
+    <a class="btn ghost" href="/tacview/{{ rec.id }}/download">下载原件</a>
+    {% if can_manage %}
+      <form method="post" action="/tacview/{{ rec.id }}/reparse" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn ghost" type="submit">重新解析</button>
+      </form>
+      <form method="post" action="/tacview/{{ rec.id }}/delete" style="display:inline"
+            onsubmit="return confirm('删除 {{ rec.original_filename }}？磁盘原件会一并删除，此操作不可撤销。')">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn danger" type="submit">删除</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if not vm %}
+<div class="flash error">
+  这份文件已归档，但解析失败：
+  <code class="small">{{ rec.parse_error or '未知原因' }}</code><br>
+  <span class="small">请确认上传的是 Tacview「File → Export Flight Log」导出的 XML
+  （而不是 .acmi 本体）。修正后可「重新解析」或删除后重新上传。</span>
+</div>
+{% else %}
+
+<div class="panel tight">
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ rec.event_count }}</span><span class="k">事件总数</span></div>
+    <div class="stat"><span class="v">{{ rec.human_pilots }}</span><span class="k">飞行员</span></div>
+    <div class="stat"><span class="v">{{ rec.landed_pilots }}</span><span class="k">降落</span></div>
+    <div class="stat"><span class="v">{{ rec.ejected_or_shot_pilots }}</span><span class="k">弹射/被击落</span></div>
+    <div class="stat"><span class="v">{{ rec.total_shots }}</span><span class="k">射击</span></div>
+    <div class="stat"><span class="v">{{ rec.total_hits }}</span><span class="k">命中</span></div>
+    <div class="stat"><span class="v">{{ rec.total_kills }}</span><span class="k">击杀</span></div>
+    <div class="stat"><span class="v">{{ rec.total_misses }}</span><span class="k">未中/被拦截</span></div>
+  </div>
+  <div class="small muted" style="margin-top:8px">
+    ⚠️ 本页数据来自 <b>Tacview 事件导出</b>，与任务详情里来自 <b>.acmi 架次</b>的统计口径不同
+    （这里是"射击→命中→击毁"事件链，那里是飞行时长/航程），两者不互相校验。
+    "命中"按<b>成功的射击次数</b>计（一门炮连发只算一发）。
+  </div>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0">全体武器效能</h2>
+  <table>
+    <thead><tr><th>武器</th><th class="num">射击</th><th class="num">命中</th><th class="num">击杀</th></tr></thead>
+    <tbody>
+      {% for w in vm.overview.shotsByWeapon %}
+      <tr>
+        <td>{{ w.weapon }}</td>
+        <td class="num">{{ w.shots }}</td>
+        <td class="num">{{ w.hits }}</td>
+        <td class="num">{{ w.kills }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% for p in vm.pilots %}
+<div class="panel">
+  <h2 style="margin-top:0">
+    {{ p.pilot }}
+    {% if p.flightEnd == 'Landed' %}<span class="badge ok">已降落</span>
+    {% elif p.flightEnd == 'Ejected' %}<span class="badge warn">弹射</span>
+    {% elif p.flightEnd == 'Shot down' %}<span class="badge danger">被击落</span>{% endif %}
+    {% if p.totalsFriendly.hits or p.totalsFriendly.kills %}
+      <span class="badge danger" title="误击友军（命中 {{ p.totalsFriendly.hits }} / 击杀 {{ p.totalsFriendly.kills }}）">误击</span>
+    {% endif %}
+  </h2>
+
+  <div class="stat-row" style="margin-bottom:12px">
+    <div class="stat"><span class="v">{{ p.totals.shots }}</span><span class="k">射击</span></div>
+    <div class="stat"><span class="v">{{ p.totals.hits }}</span><span class="k">命中</span></div>
+    <div class="stat"><span class="v">{{ p.totals.kills }}</span><span class="k">击杀</span></div>
+    <div class="stat"><span class="v">{{ p.totals.misses }}</span><span class="k">未中/被拦截</span></div>
+    <div class="stat"><span class="v">{{ p.flightTime }}</span><span class="k">飞行时长（事件口径）</span></div>
+    <div class="stat"><span class="v">{{ p.totalsAA.shots }}/{{ p.totalsAA.hits }}/{{ p.totalsAA.kills }}</span><span class="k">空空 射/中/杀</span></div>
+    <div class="stat"><span class="v">{{ p.totalsAG.shots }}/{{ p.totalsAG.hits }}/{{ p.totalsAG.kills }}</span><span class="k">空地 射/中/杀</span></div>
+  </div>
+
+  {% if p.byWeapon %}
+  <h3>分武器</h3>
+  <table>
+    <thead><tr><th>武器</th><th class="num">射击</th><th class="num">命中</th>
+               <th class="num">击杀</th><th class="num">未中</th></tr></thead>
+    <tbody>
+      {% for w in p.byWeapon %}
+      <tr>
+        <td>{{ w.weapon }}</td>
+        <td class="num">{{ w.shots }}</td>
+        <td class="num">{{ w.hits }}</td>
+        <td class="num">{{ w.kills }}</td>
+        <td class="num">{{ w.misses }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if p.chains %}
+  <h3>击杀链</h3>
+  <table>
+    <thead><tr><th>射击时刻</th><th>武器</th><th>目标</th><th>命中</th><th>击毁</th>
+               <th>域</th><th>备注</th></tr></thead>
+    <tbody>
+      {% for c in p.chains %}
+      <tr>
+        <td class="small nowrap">{{ c.shotStr }}</td>
+        <td class="small">{{ c.weapon }}</td>
+        <td class="small">
+          {% if c.intercepted %}
+            <span class="badge warn">被拦截</span> {{ c.interceptorName or '—' }}
+          {% else %}
+            {{ c.targetName or '—' }}
+          {% endif %}
+        </td>
+        <td class="small nowrap">{{ c.hitStr or '—' }}</td>
+        <td class="small nowrap">{{ c.killStr or '—' }}</td>
+        <td><span class="badge {{ 'accent' if c.domain == 'AA' else '' }}">{{ '空空' if c.domain == 'AA' else '空地' }}</span></td>
+        <td class="small muted">
+          {% if c.friendlyHit or c.friendlyKill %}<span class="badge danger">误击</span> {% endif %}
+          {% if c.extraKills %}<span class="badge ok" title="{{ c.extraKillNames|join('、') }}">溅射 +{{ c.extraKills }}</span> {% endif %}
+          {% if c.shooterMismatch %}<span class="badge warn" title="命中事件与开火事件的射手不一致，关联结果仅供参考">射手存疑</span> {% endif %}
+          {% if c.method == 'heuristic' %}<span class="badge" title="炸弹连投等无稳定武器 ID 的事件按时间窗启发式关联">启发式</span> {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if p.misses %}
+  <details style="margin-top:10px">
+    <summary class="small" style="cursor:pointer;color:var(--fg-muted)">
+      未命中 / 被拦截的射击（{{ p.misses|length }}）
+    </summary>
+    <table style="margin-top:8px">
+      <thead><tr><th>时刻</th><th>武器</th><th>域</th></tr></thead>
+      <tbody>
+        {% for m in p.misses %}
+        <tr>
+          <td class="small nowrap">{{ m.shotStr }}</td>
+          <td class="small">{{ m.weapon }}</td>
+          <td><span class="badge {{ 'accent' if m.domain == 'AA' else '' }}">{{ '空空' if m.domain == 'AA' else '空地' }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

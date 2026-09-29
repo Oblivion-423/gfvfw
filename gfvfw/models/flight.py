@@ -95,7 +95,10 @@ class Mission(IdMixin, TimestampMixin, SoftDeleteMixin, Base):
     #: success / partial / failure / aborted
     outcome: Mapped[Optional[str]] = mapped_column(String(16))
 
-    visibility: Mapped[str] = mapped_column(String(16), default="members", nullable=False)
+    #: 三档：public（所有注册用户可见）/ members（仅成员）/ command（管理层）。
+    #: **默认 public**（2026-09 联队口径）：上传/归并出的任务默认公开，
+    #: 内部与指挥层留给确需控制范围的任务。
+    visibility: Mapped[str] = mapped_column(String(16), default="public", nullable=False)
     #: complete / partial / missing —— 上传完整性（需求 §5.1）
     acmi_completeness: Mapped[str] = mapped_column(
         String(16), default="unknown", nullable=False)

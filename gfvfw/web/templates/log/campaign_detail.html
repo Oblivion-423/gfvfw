@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}{{ campaign.name }} · 战役记录 · {{ SITE_NAME }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="small">
+      <a href="/log/campaign">← 全部战役</a>
+    </div>
+    <h1>{{ campaign.name }}</h1>
+    <div class="sub">
+      <span class="badge {{ status_badge.get(campaign.status, '') }}">
+        {{ status_labels.get(campaign.status, campaign.status) }}</span>
+      {% if campaign.theater %}　战区 {{ campaign.theater }}{% endif %}
+      {% if campaign.started_at or campaign.ended_at %}
+      　{{ campaign.started_at|date }} ～ {{ campaign.ended_at|date or '进行中' }}
+      {% endif %}
+      {% if campaign.summary %}　·　{{ campaign.summary }}{% endif %}
+    </div>
+  </div>
+  <div class="row">
+    {% if can_manage_campaign %}
+      <a class="btn ghost" href="/campaigns/{{ campaign.id }}">管理本战役</a>
+    {% endif %}
+    <a class="btn ghost" href="/log/training">训练记录</a>
+    <a class="btn ghost" href="/log/pilots">个人记录</a>
+  </div>
+</div>
+
+{# ACMI 工作台（上传/认领/归并/删除）是写操作 —— 只有队员能看。
+   本页自身对游客开放（列表/汇总），守卫在宿主页面 include 处。 #}
+{% if acmi_any and principal.is_member %}{% include "acmi/_wizard.html" %}{% endif %}
+
+<form method="get" action="/log/campaign/{{ campaign.id }}" class="panel tight">
+  <div class="row">
+    <div class="field" style="min-width:150px">
+      <label for="date_from">起始（UTC+8）</label>
+      <input type="date" id="date_from" name="date_from" value="{{ q.date_from }}">
+    </div>
+    <div class="field" style="min-width:150px">
+      <label for="date_to">结束（UTC+8）</label>
+      <input type="date" id="date_to" name="date_to" value="{{ q.date_to }}">
+    </div>
+    <div class="spacer"></div>
+    <div class="row" style="align-self:flex-end">
+      <button class="btn" type="submit">筛选</button>
+      <a class="btn ghost" href="/log/campaign/{{ campaign.id }}">重置</a>
+    </div>
+  </div>
+</form>
+
+{% if totals.missions %}
+<div class="panel tight">
+  <div class="stat-row">
+    <div class="stat"><span class="v">{{ totals.missions }}</span><span class="k">任务数</span></div>
+    <div class="stat"><span class="v">{{ totals.sorties }}</span><span class="k">总架次</span></div>
+    <div class="stat"><span class="v">{{ totals.flight_seconds|dur }}</span><span class="k">日志总时长</span></div>
+    <div class="stat"><span class="v">{{ totals.distance_nm|round|int }} NM</span><span class="k">总航程</span></div>
+    <div class="stat"><span class="v">{{ totals.deaths }}</span><span class="k">战损</span></div>
+  </div>
+  <div class="small muted" style="margin-top:8px">
+    <b>「日志总时长」</b>按<b>任务</b>计 —— 各架次<b>在空区间</b>取并集，多人飞同一任务只算一次（与下方每行一致）。
+    它与 ACMI 的<b>「记录时长」</b>（录制时间窗，含起飞前/降落后）不是同一个量，不要互相校验。
+  </div>
+</div>
+
+<div class="panel" style="padding:0;overflow:hidden">
+  <table>
+    <thead>
+      <tr><th>任务时间（UTC+8）</th><th>任务</th><th>类型</th>
+          <th class="num">架次</th><th class="num">日志时长</th>
+          <th class="num">航程</th><th class="num">战损</th><th>ACMI</th></tr>
+    </thead>
+    <tbody>
+      {% for r in missions %}
+      {% set m = r.mission %}
+      <tr>
+        <td class="small nowrap">{{ m.started_at|datetime }}</td>
+        <td><a href="/missions/{{ m.id }}">{{ m.name }}</a></td>
+        <td class="small">{{ type_labels.get(m.mission_type, m.mission_type) }}</td>
+        <td class="num">{{ r.sorties }}</td>
+        <td class="num">{{ r.flight_seconds|dur }}</td>
+        <td class="num">{{ r.distance_nm|round|int }} NM</td>
+        <td class="num">{{ r.deaths }}</td>
+        <td><span class="badge {{ 'ok' if m.acmi_completeness == 'complete' else ('warn' if m.acmi_completeness == 'partial' else 'danger') }}">
+          {{ {'complete':'完整','partial':'部分','missing':'缺失','unknown':'未知'}.get(m.acmi_completeness, m.acmi_completeness) }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+<div class="empty">
+  这场战役还没有归入任何任务。<br>
+  <span class="small">可把任务的 ACMI 在上方工作台归并进来（归并时战役已锁定为本战役）；
+  {% if can_manage_campaign %}或到 <a href="/campaigns/{{ campaign.id }}">战役管理</a> 把已有任务归入。{% else %}归入战役由指挥 / 教官操作。{% endif %}</span>
+</div>
+{% endif %}
+{% endblock %}

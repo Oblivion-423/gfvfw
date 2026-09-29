@@ -138,7 +138,7 @@ def resolve_campaign(db: Session, state: CampaignState, *,
         return None
     name = ("%s %s" % (theater, scenario)).strip() or "未命名战役"
     camp = Campaign(name=name, theater=theater or None, status="active",
-                    visibility="members", summary="由上传的 BMS 存档自动建立")
+                    visibility="public", summary="由上传的 BMS 存档自动建立")
     db.add(camp)
     db.flush()
     log.info("按存档自动新建战役：%s（%s）", name, camp.id)
@@ -389,7 +389,9 @@ class CampaignService:
                 team_id=u.team_id, name_id=u.name_id, name=u.name,
                 callsign=u.callsign, grid_x=u.east, grid_y=u.north, z=u.z,
                 dest_x=u.dest_east, dest_y=u.dest_north,
-                aircraft_type=u.aircraft_type, mission_code=u.mission_code,
+                aircraft_type=u.aircraft_type, unit_type=u.unit_type,
+                unit_role=u.unit_role,
+                mission_code=u.mission_code,
                 mission_name=u.mission_name, current_wp=u.current_wp,
                 total_wp=u.total_wp, tot_ms=u.tot_ms,
                 package_unit_id=u.package_unit_id,

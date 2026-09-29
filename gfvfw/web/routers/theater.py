@@ -67,6 +67,10 @@ SIG_OBJECTIVE_TYPES = (
 #: 1 海里 = 1.852 km = 1.852 网格格（网格 1 格 = 1 km）
 NM_TO_GRID = 1.852
 
+#: 队伍配色（BMS 的 color 是 0..7 的槽位；态势图与详情页共用）
+TEAM_PALETTE = ["#4f8cff", "#ff5c5c", "#3fbf7f", "#ffcc4d",
+                "#a86bff", "#ff8a3d", "#38c7c7", "#c0c0c0"]
+
 
 def _load_campaign(db: Session, campaign_id: str) -> Campaign:
     camp = db.get(Campaign, campaign_id)
@@ -383,9 +387,13 @@ def theater_detail(campaign_id: str, request: Request,
             select(CampaignEvent).where(CampaignEvent.save_id == ov.save.id)
             .order_by(CampaignEvent.at_campaign_time_ms.desc())))
         ctx["warnings"] = json.loads(ov.save.parse_warnings_json or "[]")
-        # 「战区地图」面板：战役管理里也要能直接看到战区底图。
-        # 只放**一张**（7~15 MB）；列表页每行一张会把首屏拖成几十 MB。
+        # 「战场态势图」面板：首页直接渲染**完整态势图**（目标点 + 单位 +
+        # SAM 威胁环 + 缩放平移），与 /theater/{id}/map 共用同一份地图模板
+        # （theater/_situation_map.html）与同一套取数（_situation_ctx）。
+        # 底图选择沿用 _map_ctx —— 两页共用同一套 ``?map=`` 选择逻辑。
         ctx.update(_map_ctx(request, ov.save))
+        ctx.update(_situation_ctx(db, ov.save, request))
+        ctx["map_url"] = "/theater/%s" % camp.id
     return render(request, "theater/detail.html", ctx)
 
 
@@ -400,57 +408,21 @@ def theater_map(campaign_id: str, request: Request,
     """战场态势图：目标点 + 单位 + SAM 威胁环 + 靶心，纯网格坐标绘制。"""
     camp = _load_campaign(db, campaign_id)
     sv = _latest_or_404(db, campaign_id)
-
-    kind = request.query_params.get("kind", "Flight")
-    layer = request.query_params.get("layer", "key")   # key | all
-    #: 可选：把全部 SAM 阵地都按某一型号的真实射程画成统一威胁环。
-    #: 因为存档里**不记录每个 SAM 阵地是哪一型系统**（目标点只有
-    #: "SAM / AAA Site" 这一个类型名），所以逐点画不同半径是做不到的；
-    #: 这个参数提供的是一个**透明的假设视图**，不是实测结果。
-    sam_assume = (request.query_params.get("sam") or "").strip()
-    objectives = list(db.scalars(
-        select(CampaignObjective).where(CampaignObjective.save_id == sv.id)
-        .where(CampaignObjective.grid_x.is_not(None))))
-    units = list(db.scalars(
-        select(CampaignUnit).where(CampaignUnit.save_id == sv.id)
-        .where(CampaignUnit.grid_x.is_not(None))))
     teams = list(db.scalars(
         select(CampaignTeamState).where(CampaignTeamState.save_id == sv.id)
         .order_by(CampaignTeamState.team_id)))
-
-    # 目标点按类型分组计数（图层控制与图例用）
-    type_counts = Counter(o.type_name or "Unknown" for o in objectives)
-    kinds = Counter(u.unit_kind for u in units)
-    shown = objectives if layer == "all" else [
-        o for o in objectives if (o.type_name or "") in SIG_OBJECTIVE_TYPES]
-
-    # 队伍配色（BMS 的 color 是 0..7 的槽位）
-    palette = ["#4f8cff", "#ff5c5c", "#3fbf7f", "#ffcc4d",
-               "#a86bff", "#ff8a3d", "#38c7c7", "#c0c0c0"]
-
-    sam_threat = _sam_threat_for(db, sv)
     tctx = _theater_context(sv)
 
-    ctx = {
+    ctx = _situation_ctx(db, sv, request)
+    ctx.update({
         "campaign": camp, "save": sv,
         "latest": sv,
-        "objectives": shown, "all_count": len(objectives),
-        "units": units, "teams": teams,
-        "type_counts": sorted(type_counts.items(), key=lambda x: -x[1]),
-        "kinds": kinds, "kind": kind, "layer": layer,
-        "grid": GRID_SIZE,
-        "palette": palette,
-        "bullseye": (sv.bullseye_x, sv.bullseye_y),
+        "teams": teams,
         "bullseye_latlon": _latlon(tctx.get("proj_obj"), sv.bullseye_x, sv.bullseye_y),
-        "unit_kind_cn": UNIT_KIND_CN,
-        "sam_threat": sam_threat,
-        "sam_assume": sam_assume,
-        "sam_assume_radius": sam_threat.get(sam_assume),
-        "nm_to_grid": NM_TO_GRID,
         "theater_root": tctx.get("theater_root"),
         "projection": tctx.get("projection"),
         "grid_center_latlon": tctx.get("grid_center_latlon"),
-    }
+    })
     # 剧场地图底图（与战役管理详情页共用同一套选择逻辑）
     ctx.update(_map_ctx(request, sv))
     return render(request, "theater/map.html", ctx)
@@ -508,6 +480,72 @@ def _map_ctx(request: Request, sv: CampaignSave) -> dict:
         "sel_map_idx": sel_idx,
         "default_map": default_map,
         "maps_off": off,
+    }
+
+
+def _situation_ctx(db: Session, sv: CampaignSave, request: Request) -> dict:
+    """态势图**叠加层**的模板上下文（战场态势图页与战役管理详情页共用）。
+
+    两个页面都渲染同一张地图（``theater/_situation_map.html``），取数与
+    参数解析各写一份必然慢慢不一致 —— 与 ``_map_ctx``（底图选择）抽出来
+    的理由相同。地图模板需要的变量都在这里；图例 / SAM 射程表等辅助
+    面板只在态势图页出现，相关变量由 ``theater_map`` 自己补。
+
+    取数口径：``layer=key``（默认）时目标点**在 SQL 里**就只取 SIG 类型，
+    其余类型只进 ``type_counts`` 图例 —— 战役管理详情页每次打开都要走
+    这里，别把 6944 行全量 hydrate 成 ORM 对象；``layer=all`` 才取全量。
+    """
+    layer = request.query_params.get("layer", "key")   # key | all
+    #: 可选：把全部 SAM 阵地都按某一型号的真实射程画成统一威胁环。
+    #: 因为存档里**不记录每个 SAM 阵地是哪一型系统**（目标点只有
+    #: "SAM / AAA Site" 这一个类型名），所以逐点画不同半径是做不到的；
+    #: 这个参数提供的是一个**透明的假设视图**，不是实测结果。
+    sam_assume = (request.query_params.get("sam") or "").strip()
+
+    base_q = (select(CampaignObjective)
+              .where(CampaignObjective.save_id == sv.id)
+              .where(CampaignObjective.grid_x.is_not(None)))
+    if layer == "all":
+        objectives = list(db.scalars(base_q))
+    else:
+        objectives = list(db.scalars(
+            base_q.where(CampaignObjective.type_name.in_(SIG_OBJECTIVE_TYPES))))
+    all_count = db.scalar(
+        select(func.count())
+        .select_from(CampaignObjective)
+        .where(CampaignObjective.save_id == sv.id,
+               CampaignObjective.grid_x.is_not(None))) or 0
+    units = list(db.scalars(
+        select(CampaignUnit).where(CampaignUnit.save_id == sv.id)
+        .where(CampaignUnit.grid_x.is_not(None))))
+
+    # 目标点按类型分组计数（图层控制与图例用）—— 按**全量**目标点统计，
+    # 与 layer 无关，所以用 GROUP BY 单独取，不依赖上面过滤后的列表
+    rows = db.execute(
+        select(CampaignObjective.type_name, func.count())
+        .where(CampaignObjective.save_id == sv.id,
+               CampaignObjective.grid_x.is_not(None))
+        .group_by(CampaignObjective.type_name)).all()
+    type_counts = sorted(((t or "Unknown", n) for t, n in rows),
+                         key=lambda x: -x[1])
+    kinds = Counter(u.unit_kind for u in units)
+
+    sam_threat = _sam_threat_for(db, sv)
+    return {
+        "objectives": objectives,
+        "all_count": all_count,
+        "units": units,
+        "type_counts": type_counts,
+        "kinds": kinds,
+        "layer": layer,
+        "sam_threat": sam_threat,
+        "sam_assume": sam_assume,
+        "sam_assume_radius": sam_threat.get(sam_assume),
+        "grid": GRID_SIZE,
+        "palette": TEAM_PALETTE,
+        "bullseye": (sv.bullseye_x, sv.bullseye_y),
+        "nm_to_grid": NM_TO_GRID,
+        "unit_kind_cn": UNIT_KIND_CN,
     }
 
 
