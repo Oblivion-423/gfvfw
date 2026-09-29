@@ -362,3 +362,35 @@
   if (refreshBtn) refreshBtn.addEventListener('click', refreshTree);
   refreshTree();
 })();
+
+  // ---------------- 高度自适应 ----------------
+  function fitExplorerHeight() {
+    const page = document.querySelector('.explorer-page');
+    if (!page) return;
+
+    // 重置，避免上一次设置的高度影响测量
+    page.style.height = '';
+    page.style.marginBottom = '';
+
+    const rect = page.getBoundingClientRect();
+    const topOffset = rect.top;             // 页面顶部到视口顶部的距离
+
+    // 找最近的 main 容器，取它的下 padding（被负 margin 抵消）
+    const main = page.closest('main');
+    const mainPB = main
+      ? parseFloat(getComputedStyle(main).paddingBottom) || 0
+      : 0;
+
+    const avail = window.innerHeight - topOffset - mainPB;
+    if (avail > 200) {
+      page.style.height = avail + 'px';
+      page.style.marginBottom = (-mainPB) + 'px';
+    }
+  }
+
+  let _fitTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(_fitTimer);
+    _fitTimer = setTimeout(fitExplorerHeight, 60);   // 防抖
+  });
+  fitExplorerHeight();
