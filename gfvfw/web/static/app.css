@@ -328,19 +328,16 @@ a.step:hover { border-color: var(--accent-dim); color: var(--accent); text-decor
 }
 
    资料查询（library）
-   ========================================================================== */
+   /* ========================================================================== */
 /* ---------- 页面骨架 ---------- */
 /* 高度由 JS (fitExplorerHeight) 运行时注入，不写死像素 */
+
 .explorer-page {
-  display: flex;
-  flex-direction: column;
+  display: flex !important;
+  flex-direction: column !important;
   min-height: 500px;
-  /* 注意：这里故意不写 height 和 margin-bottom */
 }
-.explorer-page .page-head {
-  flex-shrink: 0;
-  margin-bottom: 14px;
-}
+
 
 .explorer {
   flex: 1;
