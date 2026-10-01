@@ -360,7 +360,7 @@
 
   const refreshBtn = document.getElementById('refreshBtn');
   if (refreshBtn) refreshBtn.addEventListener('click', refreshTree);
-  refreshTree();33333333333333333333333333333333333333333334
+  refreshTree();
 })();
 
   function fitExplorerHeight() {
